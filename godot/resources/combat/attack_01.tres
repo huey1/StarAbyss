@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="AttackDefinition" load_steps=2 format=3]
+[ext_resource type="Script" path="res://scripts/combat/attack_definition.gd" id="1"]
+[resource]
+script = ExtResource("1")
+display_name = "一式 · 横斩"
+localization_key = &"attack_01"
+damage = 12.0
+duration = 0.48
+hit_start = 0.16
+hit_end = 0.28
+combo_open = 0.30
+combo_close = 0.48
+dodge_cancel_open = 0.30
+dodge_cancel_close = 0.44

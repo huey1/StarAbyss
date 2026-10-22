@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="GuardianSettings" load_steps=4 format=3]
+[ext_resource type="Script" path="res://scripts/ai/guardian_settings.gd" id="1"]
+[ext_resource type="Resource" path="res://resources/boss/guardian_sweep.tres" id="2"]
+[ext_resource type="Resource" path="res://resources/boss/guardian_shockwave.tres" id="3"]
+[resource]
+script = ExtResource("1")
+display_name = "晶核守卫"
+localization_key = &"enemy_guardian"
+max_health = 350
+move_speed = 2.6
+detection_radius = 30.0
+home_leash_distance = 30.0
+attack_trigger_distance = 2.5
+waiting_distance = 3.6
+stagger_duration = 0.0
+attack = ExtResource("2")
+shockwave = ExtResource("3")
+minimum_attack_gap = 1.6
+maximum_attack_gap = 2.4

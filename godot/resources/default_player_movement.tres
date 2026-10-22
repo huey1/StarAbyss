@@ -1,0 +1,19 @@
+[gd_resource type="Resource" script_class="PlayerMovementSettings" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/player/player_movement_settings.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+move_speed = 6.0
+acceleration = 22.0
+deceleration = 28.0
+rotation_speed = 12.0
+air_control = 0.45
+jump_velocity = 6.5
+gravity_scale = 1.0
+terminal_fall_speed = 40.0
+dodge_speed = 8.888889
+dodge_duration = 0.45
+dodge_cooldown = 1.2
+dodge_invulnerable_start = 0.1
+dodge_invulnerable_end = 0.3

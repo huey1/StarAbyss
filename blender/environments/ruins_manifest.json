@@ -1,0 +1,117 @@
+{
+  "units": "meters",
+  "godot_up": "+Y",
+  "godot_north": "-Z",
+  "visual_only": true,
+  "floor_top": 0.004,
+  "inlay_top_max": 0.01,
+  "mesh_modules": [
+    "ENV_Ruins_FloorInlay",
+    "ENV_Ruins_Crystals",
+    "ENV_Ruins_Floor",
+    "ENV_Ruins_Walls",
+    "ENV_Ruins_Platforms",
+    "ENV_Ruins_Pillars",
+    "ENV_Ruins_GateArch"
+  ],
+  "bounds_godot": {
+    "ENV_Ruins_FloorInlay": {
+      "min": [
+        -17.6275,
+        0.004,
+        -17.6275
+      ],
+      "max": [
+        17.6275,
+        0.01,
+        17.6275
+      ]
+    },
+    "ENV_Ruins_Crystals": {
+      "min": [
+        -19.67,
+        3.42,
+        -19.64454
+      ],
+      "max": [
+        19.67,
+        5.8,
+        19.64454
+      ]
+    },
+    "ENV_Ruins_Floor": {
+      "min": [
+        -20.0,
+        -1.01,
+        -20.0
+      ],
+      "max": [
+        20.0,
+        0.004,
+        20.0
+      ]
+    },
+    "ENV_Ruins_Walls": {
+      "min": [
+        -20.0,
+        0.0,
+        -20.0
+      ],
+      "max": [
+        20.0,
+        4.0,
+        20.0
+      ]
+    },
+    "ENV_Ruins_Platforms": {
+      "min": [
+        -6.5,
+        0.0,
+        -7.006
+      ],
+      "max": [
+        8.0,
+        2.0,
+        1.506
+      ]
+    },
+    "ENV_Ruins_Pillars": {
+      "min": [
+        -9.75,
+        0.0,
+        -7.75
+      ],
+      "max": [
+        9.75,
+        5.17,
+        -6.24
+      ]
+    },
+    "ENV_Ruins_GateArch": {
+      "min": [
+        -2.42,
+        0.0,
+        -16.25
+      ],
+      "max": [
+        2.42,
+        5.83,
+        -15.735
+      ]
+    }
+  },
+  "vertices": 9843,
+  "triangles": 17606,
+  "materials": [
+    "CrystalCyan",
+    "RuinBronze",
+    "RuinDark",
+    "RuinEdge",
+    "RuinInlay",
+    "RuinStone",
+    "RuinStoneAlt"
+  ],
+  "source": "D:\\AiProject\\StarAbyss\\blender\\environments\\ruins_kit.blend",
+  "export": "D:\\AiProject\\StarAbyss\\godot\\assets\\models\\environment\\ruins_kit.glb",
+  "geometry_unchanged": "Original arena colliders and navigation remain authoritative"
+}

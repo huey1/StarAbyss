@@ -1,0 +1,15 @@
+[gd_resource type="Resource" script_class="AttackDefinition" load_steps=2 format=3]
+[ext_resource type="Script" path="res://scripts/combat/attack_definition.gd" id="1"]
+[resource]
+script = ExtResource("1")
+display_name = "二式 · 返斩"
+localization_key = &"attack_02"
+damage = 16.0
+duration = 0.56
+hit_start = 0.20
+hit_end = 0.34
+combo_open = 0.36
+combo_close = 0.56
+dodge_cancel_open = 0.36
+dodge_cancel_close = 0.52
+reverse_swing = true

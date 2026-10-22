@@ -1,0 +1,32 @@
+[gd_scene load_steps=15 format=3]
+[ext_resource type="Script" path="res://scripts/systems/run_manager.gd" id="1"]
+[ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="2"]
+[ext_resource type="Script" path="res://scripts/systems/blessing_manager.gd" id="3"]
+[ext_resource type="Resource" path="res://resources/blessings/blessing_flame.tres" id="4"]
+[ext_resource type="Resource" path="res://resources/blessings/blessing_wind.tres" id="5"]
+[ext_resource type="Resource" path="res://resources/blessings/blessing_vitality.tres" id="6"]
+[ext_resource type="Resource" path="res://resources/rooms/room_01.tres" id="7"]
+[ext_resource type="Resource" path="res://resources/rooms/room_02.tres" id="8"]
+[ext_resource type="Resource" path="res://resources/rooms/room_03.tres" id="9"]
+[ext_resource type="Script" path="res://scripts/systems/room_definition.gd" id="10"]
+[ext_resource type="Script" path="res://scripts/systems/blessing_definition.gd" id="11"]
+[ext_resource type="Script" path="res://scripts/systems/run_ui.gd" id="12"]
+[ext_resource type="Script" path="res://scripts/audio/run_audio.gd" id="13_audio"]
+[ext_resource type="Script" path="res://scripts/systems/run_metrics.gd" id="14_metrics"]
+[node name="RoomRun" type="Node3D"]
+process_mode = 3
+script = ExtResource("1")
+rooms = Array[ExtResource("10")]([ExtResource("7"), ExtResource("8"), ExtResource("9")])
+[node name="Player" parent="." instance=ExtResource("2")]
+process_mode = 1
+position = Vector3(0, 0.02, 8)
+[node name="BlessingManager" type="Node" parent="."]
+script = ExtResource("3")
+pool = Array[ExtResource("11")]([ExtResource("4"), ExtResource("5"), ExtResource("6")])
+[node name="RunUI" type="CanvasLayer" parent="."]
+process_mode = 3
+script = ExtResource("12")
+[node name="RunAudio" type="Node" parent="."]
+script = ExtResource("13_audio")
+[node name="RunMetrics" type="Node" parent="."]
+script = ExtResource("14_metrics")

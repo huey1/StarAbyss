@@ -1,0 +1,44 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="PackedScene" path="res://scenes/levels/arena_geometry.tscn" id="1_geometry"]
+[ext_resource type="PackedScene" path="res://scenes/art/ruins_dressing.tscn" id="2_art"]
+
+[node name="ArenaGeometry" instance=ExtResource("1_geometry")]
+
+[node name="Mesh" parent="Ground"]
+visible = false
+
+[node name="Mesh" parent="NorthWall"]
+visible = false
+
+[node name="Mesh" parent="SouthWall"]
+visible = false
+
+[node name="Mesh" parent="EastWall"]
+visible = false
+
+[node name="Mesh" parent="WestWall"]
+visible = false
+
+[node name="Mesh" parent="LowBlock"]
+visible = false
+
+[node name="Mesh" parent="Step"]
+visible = false
+
+[node name="Mesh" parent="HighPlatform"]
+visible = false
+
+[node name="Mesh" parent="WestPillar"]
+visible = false
+
+[node name="Mesh" parent="EastPillar"]
+visible = false
+
+[node name="Markings" parent="."]
+visible = false
+
+[node name="NorthLabel" parent="."]
+visible = false
+
+[node name="RuinsDressing" parent="." instance=ExtResource("2_art")]

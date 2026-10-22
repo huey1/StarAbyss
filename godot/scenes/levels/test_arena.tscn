@@ -1,0 +1,25 @@
+[gd_scene load_steps=6 format=3]
+[ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="1_player"]
+[ext_resource type="PackedScene" path="res://scenes/ui/debug_hud.tscn" id="2_hud"]
+[ext_resource type="PackedScene" path="res://scenes/combat/practice_target.tscn" id="3_target"]
+[ext_resource type="PackedScene" path="res://scenes/combat/practice_hazard.tscn" id="4_hazard"]
+[ext_resource type="PackedScene" path="res://scenes/levels/arena_geometry.tscn" id="5_geometry"]
+[node name="TestArena" type="Node3D"]
+[node name="Geometry" parent="." instance=ExtResource("5_geometry")]
+[node name="Player" parent="." instance=ExtResource("1_player")]
+position = Vector3(0, 0.02, 8)
+
+[node name="TargetCenter" parent="." instance=ExtResource("3_target")]
+position = Vector3(0, 0, 2)
+
+[node name="TargetLeft" parent="." instance=ExtResource("3_target")]
+position = Vector3(-3, 0, 3)
+
+[node name="TargetRight" parent="." instance=ExtResource("3_target")]
+position = Vector3(3, 0, 3)
+
+[node name="PracticeHazard" parent="." instance=ExtResource("4_hazard")]
+position = Vector3(-11, 0, 5)
+
+[node name="DebugHUD" parent="." instance=ExtResource("2_hud")]
+

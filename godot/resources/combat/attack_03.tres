@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="AttackDefinition" load_steps=2 format=3]
+[ext_resource type="Script" path="res://scripts/combat/attack_definition.gd" id="1"]
+[resource]
+script = ExtResource("1")
+display_name = "三式 · 重斩"
+localization_key = &"attack_03"
+damage = 24.0
+duration = 0.72
+hit_start = 0.25
+hit_end = 0.44
+combo_open = 0.50
+combo_close = 0.72
+dodge_cancel_open = 0.50
+dodge_cancel_close = 0.68

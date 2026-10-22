@@ -1,0 +1,61 @@
+[gd_scene load_steps=10 format=3]
+[ext_resource type="Script" path="res://scripts/systems/room_gate.gd" id="1"]
+[sub_resource type="StandardMaterial3D" id="FrameMaterial"]
+albedo_color = Color(0.15, 0.7, 0.66, 1)
+emission_enabled = true
+emission = Color(0.03, 0.3, 0.28, 1)
+[sub_resource type="StandardMaterial3D" id="BarrierMaterial"]
+transparency = 1
+albedo_color = Color(1, 0.3, 0.08, 0.55)
+emission_enabled = true
+emission = Color(0.5, 0.09, 0.01, 1)
+[sub_resource type="BoxMesh" id="Post"]
+material = SubResource("FrameMaterial")
+size = Vector3(0.3, 5, 0.5)
+[sub_resource type="BoxMesh" id="Lintel"]
+material = SubResource("FrameMaterial")
+size = Vector3(4.8, 0.3, 0.5)
+[sub_resource type="BoxMesh" id="BarrierMesh"]
+material = SubResource("BarrierMaterial")
+size = Vector3(4.2, 5, 0.35)
+[sub_resource type="BoxShape3D" id="BarrierShape"]
+size = Vector3(4.2, 5, 0.35)
+[sub_resource type="BoxShape3D" id="Trigger"]
+size = Vector3(3.8, 4, 1.2)
+[sub_resource type="BoxMesh" id="Sill"]
+material = SubResource("FrameMaterial")
+size = Vector3(4.8, 0.02, 2.2)
+[node name="RoomGate" type="Node3D"]
+script = ExtResource("1")
+[node name="LeftPost" type="MeshInstance3D" parent="."]
+position = Vector3(-2.25, 2.5, 0)
+mesh = SubResource("Post")
+[node name="RightPost" type="MeshInstance3D" parent="."]
+position = Vector3(2.25, 2.5, 0)
+mesh = SubResource("Post")
+[node name="Lintel" type="MeshInstance3D" parent="."]
+position = Vector3(0, 5, 0)
+mesh = SubResource("Lintel")
+[node name="Sill" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.015, -0.4)
+mesh = SubResource("Sill")
+[node name="Barrier" type="StaticBody3D" parent="."]
+position = Vector3(0, 2.5, 0)
+collision_layer = 1
+collision_mask = 0
+[node name="Mesh" type="MeshInstance3D" parent="Barrier"]
+mesh = SubResource("BarrierMesh")
+[node name="Shape" type="CollisionShape3D" parent="Barrier"]
+shape = SubResource("BarrierShape")
+[node name="Threshold" type="Area3D" parent="."]
+position = Vector3(0, 2, -0.9)
+collision_layer = 0
+collision_mask = 2
+monitorable = false
+[node name="Shape" type="CollisionShape3D" parent="Threshold"]
+shape = SubResource("Trigger")
+[node name="Caption" type="Label3D" parent="."]
+position = Vector3(0, 5.6, 0)
+font_size = 64
+pixel_size = 0.006
+text = "出口封锁"

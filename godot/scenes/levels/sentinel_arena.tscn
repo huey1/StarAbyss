@@ -1,0 +1,42 @@
+[gd_scene load_steps=8 format=3]
+[ext_resource type="PackedScene" path="res://scenes/levels/arena_geometry.tscn" id="1"]
+[ext_resource type="PackedScene" path="res://scenes/player/player.tscn" id="2"]
+[ext_resource type="PackedScene" path="res://scenes/enemies/sentinel.tscn" id="3"]
+[ext_resource type="PackedScene" path="res://scenes/ui/debug_hud.tscn" id="4"]
+[ext_resource type="NavigationMesh" path="res://resources/navigation/sentinel_arena_navmesh.tres" id="5"]
+[ext_resource type="Script" path="res://scripts/ai/attack_coordinator.gd" id="6"]
+[ext_resource type="Script" path="res://scripts/systems/sentinel_arena.gd" id="7"]
+
+[node name="SentinelArena" type="Node3D"]
+script = ExtResource("7")
+[node name="NavigationRegion3D" type="NavigationRegion3D" parent="."]
+navigation_mesh = ExtResource("5")
+[node name="Geometry" parent="NavigationRegion3D" instance=ExtResource("1")]
+[node name="Player" parent="." instance=ExtResource("2")]
+position = Vector3(0, 0.02, 8)
+[node name="AttackCoordinator" type="Node" parent="."]
+script = ExtResource("6")
+[node name="SentinelLeft" parent="." instance=ExtResource("3")]
+position = Vector3(-3, 0.02, 3)
+[node name="SentinelRight" parent="." instance=ExtResource("3")]
+position = Vector3(3, 0.02, 3)
+[node name="DebugHUD" parent="." instance=ExtResource("4")]
+stage_text = "P3 敌人 AI / 遗迹哨兵 1v2"
+hint_text = "左键三段剑击 · E 星刃斩 · 留意橙色预警并用 Shift 闪避"
+[node name="EncounterHUD" type="CanvasLayer" parent="."]
+[node name="Status" type="Label" parent="EncounterHUD"]
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -400.0
+offset_top = 24.0
+offset_right = 400.0
+offset_bottom = 110.0
+grow_horizontal = 2
+mouse_filter = 2
+theme_override_colors/font_color = Color(1, 0.76, 0.42, 1)
+theme_override_colors/font_shadow_color = Color(0, 0, 0, 1)
+theme_override_constants/shadow_offset_x = 2
+theme_override_constants/shadow_offset_y = 2
+theme_override_font_sizes/font_size = 26
+text = "1v2 哨兵训练"
+horizontal_alignment = 1

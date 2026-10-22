@@ -1,0 +1,262 @@
+{
+  "units": "meters",
+  "blender_forward": "+Y",
+  "godot_forward": "-Z",
+  "root_motion": "stationary Root; controller provides all displacement",
+  "weapon_direction": "Godot -Z from grip origin",
+  "characters": {
+    "player": {
+      "root": "CHR_Player_01",
+      "source": "blender/characters/player.blend",
+      "glb": "godot/assets/models/characters/player.glb",
+      "height_target": 1.75,
+      "vertices": 916,
+      "triangles": 1629,
+      "bones": [
+        "Root",
+        "Hips",
+        "Spine",
+        "Chest",
+        "Head",
+        "UpperArm_R",
+        "Forearm_R",
+        "Hand_R",
+        "WeaponSocket",
+        "UpperArm_L",
+        "Forearm_L",
+        "Hand_L",
+        "Thigh_R",
+        "Shin_R",
+        "Foot_R",
+        "Thigh_L",
+        "Shin_L",
+        "Foot_L"
+      ],
+      "socket_bone": "WeaponSocket",
+      "animations": {
+        "Idle": 1.6,
+        "Run": 0.64,
+        "Jump": 0.36,
+        "Fall": 0.4,
+        "Dodge": 0.45,
+        "Hurt": 0.25,
+        "Death": 0.85,
+        "Attack_01": 0.48,
+        "Attack_02": 0.56,
+        "Attack_03": 0.72,
+        "Skill_01": 0.7,
+        "Telegraph": 0.55,
+        "Attack": 1.28,
+        "Recover": 0.55
+      },
+      "skin": "explicit rigid weights for articulated armor segments",
+      "socket_orientation": "global rest identity; animated grip orientation solved in model space",
+      "attack_pose_keys": {
+        "Attack_01": {
+          "hit_start": 0.16,
+          "hit_end": 0.28
+        },
+        "Attack_02": {
+          "hit_start": 0.2,
+          "hit_end": 0.34
+        },
+        "Attack_03": {
+          "hit_start": 0.25,
+          "hit_end": 0.44
+        },
+        "Skill_01": {
+          "hit_start": 0.25,
+          "hit_end": 0.4
+        },
+        "Attack": {
+          "hit_start": 0.55,
+          "hit_end": 0.73
+        }
+      }
+    },
+    "sentinel": {
+      "root": "ENM_Sentinel_01",
+      "source": "blender/enemies/sentinel.blend",
+      "glb": "godot/assets/models/characters/sentinel.glb",
+      "height_target": 1.65,
+      "vertices": 852,
+      "triangles": 1548,
+      "bones": [
+        "Root",
+        "Hips",
+        "Spine",
+        "Chest",
+        "Head",
+        "UpperArm_R",
+        "Forearm_R",
+        "Hand_R",
+        "WeaponSocket",
+        "UpperArm_L",
+        "Forearm_L",
+        "Hand_L",
+        "Thigh_R",
+        "Shin_R",
+        "Foot_R",
+        "Thigh_L",
+        "Shin_L",
+        "Foot_L"
+      ],
+      "socket_bone": "WeaponSocket",
+      "animations": {
+        "Idle": 1.6,
+        "Run": 0.64,
+        "Jump": 0.36,
+        "Fall": 0.4,
+        "Dodge": 0.45,
+        "Hurt": 0.25,
+        "Death": 0.85,
+        "Attack_01": 0.48,
+        "Attack_02": 0.56,
+        "Attack_03": 0.72,
+        "Skill_01": 0.7,
+        "Telegraph": 0.55,
+        "Attack": 1.28,
+        "Recover": 0.55
+      },
+      "skin": "explicit rigid weights for articulated armor segments",
+      "socket_orientation": "global rest identity; animated grip orientation solved in model space",
+      "attack_pose_keys": {
+        "Attack_01": {
+          "hit_start": 0.16,
+          "hit_end": 0.28
+        },
+        "Attack_02": {
+          "hit_start": 0.2,
+          "hit_end": 0.34
+        },
+        "Attack_03": {
+          "hit_start": 0.25,
+          "hit_end": 0.44
+        },
+        "Skill_01": {
+          "hit_start": 0.25,
+          "hit_end": 0.4
+        },
+        "Attack": {
+          "hit_start": 0.55,
+          "hit_end": 0.73
+        }
+      }
+    },
+    "core_guardian": {
+      "root": "BOS_CoreGuardian_01",
+      "source": "blender/enemies/guardian.blend",
+      "glb": "godot/assets/models/characters/core_guardian.glb",
+      "height_target": 2.6,
+      "vertices": 872,
+      "triangles": 1580,
+      "bones": [
+        "Root",
+        "Hips",
+        "Spine",
+        "Chest",
+        "Head",
+        "UpperArm_R",
+        "Forearm_R",
+        "Hand_R",
+        "WeaponSocket",
+        "UpperArm_L",
+        "Forearm_L",
+        "Hand_L",
+        "Thigh_R",
+        "Shin_R",
+        "Foot_R",
+        "Thigh_L",
+        "Shin_L",
+        "Foot_L"
+      ],
+      "socket_bone": "WeaponSocket",
+      "animations": {
+        "Idle": 1.6,
+        "Run": 0.64,
+        "Jump": 0.36,
+        "Fall": 0.4,
+        "Dodge": 0.45,
+        "Hurt": 0.25,
+        "Death": 0.85,
+        "Attack_01": 0.48,
+        "Attack_02": 0.56,
+        "Attack_03": 0.72,
+        "Skill_01": 0.7,
+        "Telegraph": 0.55,
+        "Attack": 1.28,
+        "Recover": 0.55,
+        "Telegraph_Sweep": 0.8,
+        "Attack_Sweep": 1.67,
+        "Recover_Sweep": 0.65,
+        "Telegraph_Shockwave": 1.2,
+        "Attack_Shockwave": 2.2,
+        "Recover_Shockwave": 0.8
+      },
+      "skin": "explicit rigid weights for articulated armor segments",
+      "socket_orientation": "global rest identity; animated grip orientation solved in model space",
+      "attack_pose_keys": {
+        "Attack_01": {
+          "hit_start": 0.16,
+          "hit_end": 0.28
+        },
+        "Attack_02": {
+          "hit_start": 0.2,
+          "hit_end": 0.34
+        },
+        "Attack_03": {
+          "hit_start": 0.25,
+          "hit_end": 0.44
+        },
+        "Skill_01": {
+          "hit_start": 0.25,
+          "hit_end": 0.4
+        },
+        "Attack": {
+          "hit_start": 0.55,
+          "hit_end": 0.73
+        },
+        "Attack_Sweep": {
+          "hit_start": 0.8,
+          "hit_end": 1.02
+        },
+        "Attack_Shockwave": {
+          "hit_start": 1.2,
+          "hit_end": 1.4
+        }
+      }
+    }
+  },
+  "weapons": {
+    "sword": {
+      "grip_origin": [
+        0,
+        0,
+        0
+      ],
+      "forward_godot": "-Z",
+      "source": "blender/characters/sword.blend",
+      "triangles": 109
+    },
+    "sentinel_blade": {
+      "grip_origin": [
+        0,
+        0,
+        0
+      ],
+      "forward_godot": "-Z",
+      "source": "blender/enemies/sentinel_blade.blend",
+      "triangles": 109
+    },
+    "guardian_hammer": {
+      "grip_origin": [
+        0,
+        0,
+        0
+      ],
+      "forward_godot": "-Z",
+      "source": "blender/enemies/guardian_hammer.blend",
+      "triangles": 444
+    }
+  }
+}

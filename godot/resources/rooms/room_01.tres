@@ -1,0 +1,7 @@
+[gd_resource type="Resource" script_class="RoomDefinition" load_steps=2 format=3]
+[ext_resource type="Script" path="res://scripts/systems/room_definition.gd" id="1"]
+[resource]
+script = ExtResource("1")
+id = &"room_01"
+display_name = "遗迹前庭"
+enemy_spawns = Array[Vector3]([Vector3(-3, 0.02, 3), Vector3(3, 0.02, 3)])

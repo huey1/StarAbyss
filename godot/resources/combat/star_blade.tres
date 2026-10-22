@@ -1,0 +1,16 @@
+[gd_resource type="Resource" script_class="AttackDefinition" load_steps=2 format=3]
+[ext_resource type="Script" path="res://scripts/combat/attack_definition.gd" id="1"]
+[resource]
+script = ExtResource("1")
+display_name = "星刃斩"
+localization_key = &"skill_star_blade"
+damage = 35.0
+duration = 0.70
+hit_start = 0.25
+hit_end = 0.40
+reach = 5.0
+arc_degrees = 70.0
+combo_open = 0.70
+combo_close = 0.70
+dodge_cancel_open = 0.70
+dodge_cancel_close = 0.70

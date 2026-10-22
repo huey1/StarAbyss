@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="AttackDefinition" load_steps=2 format=3]
+[ext_resource type="Script" path="res://scripts/combat/attack_definition.gd" id="1"]
+[resource]
+script = ExtResource("1")
+display_name = "晶能冲击"
+localization_key = &"guardian.shockwave"
+damage = 25.0
+duration = 2.2
+hit_start = 1.2
+hit_end = 1.4
+reach = 4.2
+arc_degrees = 360.0

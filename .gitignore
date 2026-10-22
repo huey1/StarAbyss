@@ -1,0 +1,14 @@
+# Godot generated cache; keep .gd.uid files in version control.
+godot/.godot/
+.local/
+.local/
+godot/export.cfg
+godot/export_credentials.cfg
+builds/
+*.tmp
+*.log
+*.blend1
+*.blend2
+__pycache__/
+.DS_Store
+Thumbs.db

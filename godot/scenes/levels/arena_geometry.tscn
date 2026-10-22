@@ -1,0 +1,227 @@
+[gd_scene load_steps=20 format=3]
+
+
+[sub_resource type="ProceduralSkyMaterial" id="SkyMaterial"]
+sky_top_color = Color(0.035, 0.07, 0.14, 1)
+sky_horizon_color = Color(0.28, 0.4, 0.5, 1)
+ground_bottom_color = Color(0.04, 0.06, 0.1, 1)
+ground_horizon_color = Color(0.28, 0.4, 0.5, 1)
+
+[sub_resource type="Sky" id="Sky"]
+sky_material = SubResource("SkyMaterial")
+
+[sub_resource type="Environment" id="Environment"]
+background_mode = 2
+sky = SubResource("Sky")
+ambient_light_source = 3
+ambient_light_color = Color(0.55, 0.7, 0.85, 1)
+ambient_light_energy = 0.65
+tonemap_mode = 2
+reflected_light_source = 2
+
+[sub_resource type="StandardMaterial3D" id="FloorMaterial"]
+albedo_color = Color(0.12, 0.18, 0.22, 1)
+roughness = 0.85
+
+[sub_resource type="StandardMaterial3D" id="WallMaterial"]
+albedo_color = Color(0.24, 0.32, 0.39, 1)
+roughness = 0.8
+
+[sub_resource type="StandardMaterial3D" id="ObstacleMaterial"]
+albedo_color = Color(0.65, 0.4, 0.12, 1)
+metallic = 0.25
+roughness = 0.5
+
+[sub_resource type="StandardMaterial3D" id="LineMaterial"]
+albedo_color = Color(0.12, 0.55, 0.62, 1)
+emission_enabled = true
+emission = Color(0.03, 0.2, 0.24, 1)
+
+[sub_resource type="BoxMesh" id="FloorMesh"]
+material = SubResource("FloorMaterial")
+size = Vector3(40, 1, 40)
+
+[sub_resource type="BoxShape3D" id="FloorShape"]
+size = Vector3(40, 1, 40)
+
+[sub_resource type="BoxMesh" id="WallMesh"]
+material = SubResource("WallMaterial")
+size = Vector3(40, 4, 1)
+
+[sub_resource type="BoxShape3D" id="WallShape"]
+size = Vector3(40, 4, 1)
+
+[sub_resource type="BoxMesh" id="BlockMesh"]
+material = SubResource("ObstacleMaterial")
+size = Vector3(3, 1, 3)
+
+[sub_resource type="BoxShape3D" id="BlockShape"]
+size = Vector3(3, 1, 3)
+
+[sub_resource type="BoxMesh" id="PlatformMesh"]
+material = SubResource("ObstacleMaterial")
+size = Vector3(6, 2, 5)
+
+[sub_resource type="BoxShape3D" id="PlatformShape"]
+size = Vector3(6, 2, 5)
+
+[sub_resource type="BoxMesh" id="PillarMesh"]
+material = SubResource("WallMaterial")
+size = Vector3(1.5, 5, 1.5)
+
+[sub_resource type="BoxShape3D" id="PillarShape"]
+size = Vector3(1.5, 5, 1.5)
+
+[sub_resource type="BoxMesh" id="GridLine"]
+material = SubResource("LineMaterial")
+size = Vector3(0.035, 0.008, 38)
+
+[sub_resource type="BoxMesh" id="SpawnMarker"]
+material = SubResource("LineMaterial")
+size = Vector3(2, 0.01, 0.06)
+
+[node name="ArenaGeometry" type="Node3D"]
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+rotation_degrees = Vector3(-48, -28, 0)
+light_color = Color(1, 0.89, 0.73, 1)
+light_energy = 1.7
+shadow_enabled = true
+directional_shadow_max_distance = 70.0
+
+[node name="Ground" type="StaticBody3D" parent="."]
+position = Vector3(0, -0.5, 0)
+
+[node name="Mesh" type="MeshInstance3D" parent="Ground"]
+mesh = SubResource("FloorMesh")
+
+[node name="Collision" type="CollisionShape3D" parent="Ground"]
+shape = SubResource("FloorShape")
+
+[node name="NorthWall" type="StaticBody3D" parent="."]
+position = Vector3(0, 2, -19.5)
+
+[node name="Mesh" type="MeshInstance3D" parent="NorthWall"]
+mesh = SubResource("WallMesh")
+
+[node name="Collision" type="CollisionShape3D" parent="NorthWall"]
+shape = SubResource("WallShape")
+
+[node name="SouthWall" type="StaticBody3D" parent="."]
+position = Vector3(0, 2, 19.5)
+
+[node name="Mesh" type="MeshInstance3D" parent="SouthWall"]
+mesh = SubResource("WallMesh")
+
+[node name="Collision" type="CollisionShape3D" parent="SouthWall"]
+shape = SubResource("WallShape")
+
+[node name="EastWall" type="StaticBody3D" parent="."]
+position = Vector3(19.5, 2, 0)
+rotation_degrees = Vector3(0, 90, 0)
+
+[node name="Mesh" type="MeshInstance3D" parent="EastWall"]
+mesh = SubResource("WallMesh")
+
+[node name="Collision" type="CollisionShape3D" parent="EastWall"]
+shape = SubResource("WallShape")
+
+[node name="WestWall" type="StaticBody3D" parent="."]
+position = Vector3(-19.5, 2, 0)
+rotation_degrees = Vector3(0, 90, 0)
+
+[node name="Mesh" type="MeshInstance3D" parent="WestWall"]
+mesh = SubResource("WallMesh")
+
+[node name="Collision" type="CollisionShape3D" parent="WestWall"]
+shape = SubResource("WallShape")
+
+[node name="LowBlock" type="StaticBody3D" parent="."]
+position = Vector3(-5, 0.5, 0)
+
+[node name="Mesh" type="MeshInstance3D" parent="LowBlock"]
+mesh = SubResource("BlockMesh")
+
+[node name="Collision" type="CollisionShape3D" parent="LowBlock"]
+shape = SubResource("BlockShape")
+
+[node name="Step" type="StaticBody3D" parent="."]
+position = Vector3(5, 0.5, -0.5)
+
+[node name="Mesh" type="MeshInstance3D" parent="Step"]
+mesh = SubResource("BlockMesh")
+
+[node name="Collision" type="CollisionShape3D" parent="Step"]
+shape = SubResource("BlockShape")
+
+[node name="HighPlatform" type="StaticBody3D" parent="."]
+position = Vector3(5, 1, -4.5)
+
+[node name="Mesh" type="MeshInstance3D" parent="HighPlatform"]
+mesh = SubResource("PlatformMesh")
+
+[node name="Collision" type="CollisionShape3D" parent="HighPlatform"]
+shape = SubResource("PlatformShape")
+
+[node name="WestPillar" type="StaticBody3D" parent="."]
+position = Vector3(-9, 2.5, -7)
+
+[node name="Mesh" type="MeshInstance3D" parent="WestPillar"]
+mesh = SubResource("PillarMesh")
+
+[node name="Collision" type="CollisionShape3D" parent="WestPillar"]
+shape = SubResource("PillarShape")
+
+[node name="EastPillar" type="StaticBody3D" parent="."]
+position = Vector3(9, 2.5, -7)
+
+[node name="Mesh" type="MeshInstance3D" parent="EastPillar"]
+mesh = SubResource("PillarMesh")
+
+[node name="Collision" type="CollisionShape3D" parent="EastPillar"]
+shape = SubResource("PillarShape")
+
+[node name="Markings" type="Node3D" parent="."]
+
+[node name="CenterNS" type="MeshInstance3D" parent="Markings"]
+position = Vector3(0, 0.006, 0)
+mesh = SubResource("GridLine")
+
+[node name="WestNS" type="MeshInstance3D" parent="Markings"]
+position = Vector3(-10, 0.006, 0)
+mesh = SubResource("GridLine")
+
+[node name="EastNS" type="MeshInstance3D" parent="Markings"]
+position = Vector3(10, 0.006, 0)
+mesh = SubResource("GridLine")
+
+[node name="CenterEW" type="MeshInstance3D" parent="Markings"]
+position = Vector3(0, 0.006, 0)
+rotation_degrees = Vector3(0, 90, 0)
+mesh = SubResource("GridLine")
+
+[node name="NorthEW" type="MeshInstance3D" parent="Markings"]
+position = Vector3(0, 0.006, -10)
+rotation_degrees = Vector3(0, 90, 0)
+mesh = SubResource("GridLine")
+
+[node name="SouthEW" type="MeshInstance3D" parent="Markings"]
+position = Vector3(0, 0.006, 10)
+rotation_degrees = Vector3(0, 90, 0)
+mesh = SubResource("GridLine")
+
+[node name="Spawn" type="MeshInstance3D" parent="Markings"]
+position = Vector3(0, 0.01, 8)
+mesh = SubResource("SpawnMarker")
+
+[node name="NorthLabel" type="Label3D" parent="."]
+position = Vector3(0, 5, -18.9)
+font_size = 96
+pixel_size = 0.012
+text = "STAR ABYSS\nN / -Z"
+modulate = Color(0.3, 0.9, 0.94, 1)
+
+

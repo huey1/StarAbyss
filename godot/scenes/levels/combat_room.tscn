@@ -1,0 +1,23 @@
+[gd_scene load_steps=6 format=3]
+[ext_resource type="Script" path="res://scripts/systems/room_controller.gd" id="1"]
+[ext_resource type="PackedScene" path="res://scenes/art/ruins_arena.tscn" id="2"]
+[ext_resource type="NavigationMesh" path="res://resources/navigation/sentinel_arena_navmesh.tres" id="3"]
+[ext_resource type="Script" path="res://scripts/ai/attack_coordinator.gd" id="4"]
+[ext_resource type="PackedScene" path="res://scenes/levels/room_gate.tscn" id="5"]
+[node name="CombatRoom" type="Node3D"]
+process_mode = 1
+script = ExtResource("1")
+[node name="NavigationRegion3D" type="NavigationRegion3D" parent="."]
+navigation_mesh = ExtResource("3")
+[node name="Geometry" parent="NavigationRegion3D" instance=ExtResource("2")]
+[node name="AttackCoordinator" type="Node" parent="."]
+script = ExtResource("4")
+[node name="Enemies" type="Node3D" parent="."]
+[node name="ExitGate" parent="." instance=ExtResource("5")]
+position = Vector3(0, 0, -16)
+[node name="LeftPost" parent="ExitGate"]
+visible = false
+[node name="RightPost" parent="ExitGate"]
+visible = false
+[node name="Lintel" parent="ExitGate"]
+visible = false

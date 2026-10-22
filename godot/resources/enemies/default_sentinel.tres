@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="SentinelSettings" load_steps=3 format=3]
+[ext_resource type="Script" path="res://scripts/ai/sentinel_settings.gd" id="1"]
+[ext_resource type="Resource" path="res://resources/enemies/sentinel_slash.tres" id="2"]
+[resource]
+script = ExtResource("1")
+attack = ExtResource("2")
+max_health = 45
+move_speed = 3.2
+detection_radius = 10.0
+attack_trigger_distance = 1.8
+attack_cooldown = 1.3

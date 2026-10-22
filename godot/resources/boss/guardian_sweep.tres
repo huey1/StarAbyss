@@ -1,0 +1,12 @@
+[gd_resource type="Resource" script_class="AttackDefinition" load_steps=2 format=3]
+[ext_resource type="Script" path="res://scripts/combat/attack_definition.gd" id="1"]
+[resource]
+script = ExtResource("1")
+display_name = "重锤横扫"
+localization_key = &"guardian.sweep"
+damage = 20.0
+duration = 1.67
+hit_start = 0.8
+hit_end = 1.02
+reach = 2.8
+arc_degrees = 130.0

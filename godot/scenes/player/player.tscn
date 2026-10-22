@@ -1,0 +1,182 @@
+[gd_scene load_steps=31 format=3]
+
+[ext_resource type="Script" path="res://scripts/player/player_controller.gd" id="1_player"]
+[ext_resource type="Resource" path="res://resources/default_player_movement.tres" id="2_settings"]
+[ext_resource type="Script" path="res://scripts/player/camera_controller.gd" id="3_camera"]
+[ext_resource type="Script" path="res://scripts/player/player_state_machine.gd" id="4_state"]
+[ext_resource type="Script" path="res://scripts/combat/health_component.gd" id="5_health"]
+[ext_resource type="Script" path="res://scripts/combat/hurtbox.gd" id="6_hurtbox"]
+[ext_resource type="Script" path="res://scripts/combat/player_combat.gd" id="7_combat"]
+[ext_resource type="Resource" path="res://resources/combat/default_player_combat.tres" id="8_settings"]
+[ext_resource type="Script" path="res://scripts/combat/combat_feedback.gd" id="9_feedback"]
+[ext_resource type="Script" path="res://scripts/combat/hitbox.gd" id="10_hitbox"]
+[ext_resource type="Script" path="res://scripts/combat/weapon_visual.gd" id="11_weapon"]
+[ext_resource type="Script" path="res://scripts/art/actor_presentation.gd" id="12_presentation"]
+[ext_resource type="PackedScene" path="res://assets/models/characters/player.glb" id="13_model"]
+[ext_resource type="PackedScene" path="res://assets/models/characters/sword.glb" id="14_sword"]
+[ext_resource type="Script" path="res://scripts/audio/actor_audio.gd" id="15_audio"]
+[ext_resource type="Script" path="res://scripts/art/combat_vfx.gd" id="16_vfx"]
+
+[sub_resource type="CapsuleShape3D" id="PlayerShape"]
+radius = 0.35
+height = 1.8
+
+[sub_resource type="StandardMaterial3D" id="SuitMaterial"]
+albedo_color = Color(0.1, 0.65, 0.74, 1)
+metallic = 0.3
+roughness = 0.4
+
+[sub_resource type="CapsuleMesh" id="BodyMesh"]
+material = SubResource("SuitMaterial")
+radius = 0.35
+height = 1.4
+
+[sub_resource type="StandardMaterial3D" id="HeadMaterial"]
+albedo_color = Color(0.7, 0.86, 0.92, 1)
+metallic = 0.5
+roughness = 0.3
+
+[sub_resource type="SphereMesh" id="HeadMesh"]
+material = SubResource("HeadMaterial")
+radius = 0.24
+height = 0.48
+
+[sub_resource type="StandardMaterial3D" id="VisorMaterial"]
+albedo_color = Color(1, 0.68, 0.2, 1)
+emission_enabled = true
+emission = Color(1, 0.4, 0.08, 1)
+emission_energy_multiplier = 0.6
+
+[sub_resource type="BoxMesh" id="VisorMesh"]
+material = SubResource("VisorMaterial")
+size = Vector3(0.32, 0.12, 0.12)
+
+[sub_resource type="SphereShape3D" id="CameraSweep"]
+radius = 0.22
+
+[sub_resource type="SphereShape3D" id="CombatSweep"]
+radius = 5.2
+
+[sub_resource type="StandardMaterial3D" id="BladeMaterial"]
+albedo_color = Color(0.45, 0.9, 1, 1)
+emission_enabled = true
+emission = Color(0.1, 0.4, 0.5, 1)
+
+[sub_resource type="BoxMesh" id="BladeMesh"]
+material = SubResource("BladeMaterial")
+size = Vector3(0.10, 0.06, 1.5)
+
+[sub_resource type="StandardMaterial3D" id="HiltMaterial"]
+albedo_color = Color(0.9, 0.65, 0.22, 1)
+
+[sub_resource type="BoxMesh" id="HiltMesh"]
+material = SubResource("HiltMaterial")
+size = Vector3(0.36, 0.10, 0.12)
+
+[node name="Player" type="CharacterBody3D"]
+collision_layer = 2
+collision_mask = 25
+floor_snap_length = 0.25
+script = ExtResource("1_player")
+movement_settings = ExtResource("2_settings")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.9, 0)
+shape = SubResource("PlayerShape")
+
+[node name="Visual" type="Node3D" parent="."]
+
+[node name="Body" type="MeshInstance3D" parent="Visual"]
+visible = false
+position = Vector3(0, 0.75, 0)
+mesh = SubResource("BodyMesh")
+
+[node name="Head" type="MeshInstance3D" parent="Visual"]
+visible = false
+position = Vector3(0, 1.52, 0)
+mesh = SubResource("HeadMesh")
+
+[node name="Visor" type="MeshInstance3D" parent="Visual"]
+visible = false
+position = Vector3(0, 1.54, -0.22)
+mesh = SubResource("VisorMesh")
+
+[node name="CameraRig" type="Node3D" parent="."]
+position = Vector3(0, 1.4, 0)
+script = ExtResource("3_camera")
+
+[node name="SpringArm3D" type="SpringArm3D" parent="CameraRig"]
+rotation = Vector3(-0.20943952, 0, 0)
+collision_mask = 1
+shape = SubResource("CameraSweep")
+spring_length = 4.5
+margin = 0.15
+
+[node name="Camera3D" type="Camera3D" parent="CameraRig/SpringArm3D"]
+current = true
+fov = 70.0
+near = 0.08
+far = 150.0
+
+[node name="StateMachine" type="Node" parent="."]
+script = ExtResource("4_state")
+
+[node name="Health" type="Node" parent="."]
+script = ExtResource("5_health")
+
+[node name="Hurtbox" type="Area3D" parent="."]
+position = Vector3(0, 0.9, 0)
+collision_layer = 4
+collision_mask = 0
+monitoring = false
+script = ExtResource("6_hurtbox")
+team = 1
+
+[node name="Shape" type="CollisionShape3D" parent="Hurtbox"]
+shape = SubResource("PlayerShape")
+
+[node name="Combat" type="Node" parent="."]
+script = ExtResource("7_combat")
+settings = ExtResource("8_settings")
+
+[node name="Feedback" type="Node" parent="."]
+script = ExtResource("9_feedback")
+
+[node name="Hitbox" type="Area3D" parent="Visual"]
+position = Vector3(0, 0.9, 0)
+collision_layer = 0
+collision_mask = 4
+monitorable = false
+script = ExtResource("10_hitbox")
+
+[node name="Shape" type="CollisionShape3D" parent="Visual/Hitbox"]
+shape = SubResource("CombatSweep")
+
+[node name="CombatVisual" type="Node3D" parent="Visual"]
+position = Vector3(0, 0.9, 0)
+script = ExtResource("11_weapon")
+
+[node name="WeaponPivot" type="Node3D" parent="Visual/CombatVisual"]
+visible = false
+position = Vector3(0.4, 0, -0.1)
+
+[node name="Blade" type="MeshInstance3D" parent="Visual/CombatVisual/WeaponPivot"]
+position = Vector3(0, 0, -0.85)
+mesh = SubResource("BladeMesh")
+
+[node name="Hilt" type="MeshInstance3D" parent="Visual/CombatVisual/WeaponPivot"]
+mesh = SubResource("HiltMesh")
+
+[node name="Arc" type="MeshInstance3D" parent="Visual/CombatVisual"]
+position = Vector3(0, -0.86, 0)
+
+[node name="Audio" type="Node3D" parent="."]
+script = ExtResource("15_audio")
+
+[node name="VFX" type="Node3D" parent="."]
+script = ExtResource("16_vfx")
+
+[node name="ActorPresentation" type="Node3D" parent="Visual"]
+script = ExtResource("12_presentation")
+model_scene = ExtResource("13_model")
+weapon_scene = ExtResource("14_sword")

@@ -1,0 +1,68 @@
+[gd_scene load_steps=11 format=3]
+[ext_resource type="PackedScene" path="res://scenes/enemies/sentinel.tscn" id="1"]
+[ext_resource type="Script" path="res://scripts/ai/guardian_brain.gd" id="2"]
+[ext_resource type="Resource" path="res://resources/boss/default_guardian.tres" id="3"]
+[ext_resource type="PackedScene" path="res://assets/models/characters/core_guardian.glb" id="4_model"]
+[ext_resource type="PackedScene" path="res://assets/models/characters/guardian_hammer.glb" id="5_hammer"]
+[sub_resource type="CapsuleShape3D" id="BodyShape"]
+radius = 0.65
+height = 2.6
+[sub_resource type="SphereShape3D" id="SweepShape"]
+radius = 4.5
+[sub_resource type="StandardMaterial3D" id="Armor"]
+albedo_color = Color(0.22, 0.29, 0.42, 1)
+metallic = 0.25
+roughness = 0.65
+[sub_resource type="BoxMesh" id="Hammer"]
+material = SubResource("Armor")
+size = Vector3(0.8, 0.65, 0.7)
+[sub_resource type="BoxMesh" id="Handle"]
+material = SubResource("Armor")
+size = Vector3(0.16, 0.16, 1.4)
+[node name="CoreGuardian" instance=ExtResource("1")]
+[node name="Collision" parent="." index="0"]
+position = Vector3(0, 1.3, 0)
+shape = SubResource("BodyShape")
+[node name="Body" parent="Visual" index="0"]
+position = Vector3(0, 1.3, 0)
+scale = Vector3(1.65, 1.65, 1.65)
+material_override = SubResource("Armor")
+[node name="Head" parent="Visual" index="1"]
+position = Vector3(0, 2.3, 0)
+scale = Vector3(1.6, 1.5, 1.6)
+material_override = SubResource("Armor")
+[node name="Eye" parent="Visual" index="2"]
+position = Vector3(0, 2.3, -0.42)
+scale = Vector3(1.5, 1.5, 1.5)
+[node name="Foot" parent="Visual" index="3"]
+scale = Vector3(1.65, 1.65, 1.65)
+material_override = SubResource("Armor")
+[node name="Shape" parent="Visual/Hitbox" index="0"]
+shape = SubResource("SweepShape")
+[node name="CombatVisual" parent="Visual" index="5"]
+position = Vector3(0, 1.6, 0)
+[node name="WeaponPivot" parent="Visual/CombatVisual" index="0"]
+position = Vector3(0.85, 0, -0.1)
+[node name="Blade" parent="Visual/CombatVisual/WeaponPivot" index="0"]
+position = Vector3(0, 0, -1.5)
+mesh = SubResource("Hammer")
+[node name="Hilt" parent="Visual/CombatVisual/WeaponPivot" index="1"]
+position = Vector3(0, 0, -0.65)
+mesh = SubResource("Handle")
+[node name="Arc" parent="Visual/CombatVisual" index="1"]
+position = Vector3(0, -1.56, 0)
+[node name="Hurtbox" parent="." index="3"]
+position = Vector3(0, 1.3, 0)
+[node name="Shape" parent="Hurtbox" index="0"]
+shape = SubResource("BodyShape")
+[node name="NavigationAgent3D" parent="." index="5"]
+radius = 0.65
+height = 2.6
+[node name="EnemyBrain" parent="." index="6"]
+script = ExtResource("2")
+settings = ExtResource("3")
+[node name="Status" parent="." index="7"]
+visible = false
+[node name="ActorPresentation" parent="Visual" index="6"]
+model_scene = ExtResource("4_model")
+weapon_scene = ExtResource("5_hammer")

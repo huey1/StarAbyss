@@ -1,0 +1,9 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="PackedScene" path="res://assets/models/environment/ruins_kit.glb" id="1_kit"]
+[ext_resource type="Script" path="res://scripts/art/ruins_presentation.gd" id="2_presentation"]
+
+[node name="RuinsDressing" type="Node3D"]
+script = ExtResource("2_presentation")
+
+[node name="RuinsKit" parent="." instance=ExtResource("1_kit")]
