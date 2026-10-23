@@ -177,3 +177,81 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\benchmark.ps1 -Resolut
 ```
 
 `-ExecutionPolicy Bypass` 不是可选项：本机执行策略拒绝未签名脚本（`-File` 会直接报 `not digitally signed`）。
+
+---
+
+## 9. P8 前置：图形测试基础设施加固（不改变游戏行为）
+
+**日期**：2026-10-23 · **范围**：仅 `godot/tests/` · **对发布包影响**：无（`tests/` 已在导出排除列表中，已核实 pck 内 0 个 tests 条目，pck 哈希仍为 `32e8588b…`）
+
+### 9.1 现象
+
+`full-run-integration` 与 `room-integration` 在**源码零改动**的情况下间歇失败：
+
+```
+FAIL: room 1: real-input combat clears enemies (68 frames, HP 100)
+FAIL: room 2: real-input combat clears enemies (27 frames, HP 100)
+FAIL: run 1 input-driven Boss defeated (148 frames, HP 100)
+FAIL: run 2 enters actual third-room Boss encounter   ← 随后整套件挂起 300 s+
+SCRIPT ERROR: Invalid access to property or key 'health' on a base object of type 'Nil'
+```
+
+失败形态高度一致：**玩家满血、敌人未清、帧数随机（27/68/148/345/1450）**，且之后整套件挂起而非正常退出。
+
+### 9.2 根因（两层，均已定位到具体行）
+
+**第一层：桌面焦点被抢 → 游戏自动暂停 → 战斗循环立即退出**
+
+`godot/scripts/systems/run_manager.gd:58-60`：
+
+```gdscript
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and is_node_ready():
+		pause()
+```
+
+这是**正确且必需的玩家行为**（alt-tab 必须暂停），不是缺陷。
+但测试的战斗循环写作 `if _run.current_state != COMBAT: break`，一旦窗口失焦、状态变为 `PAUSED`，循环在第一帧就退出，于是"玩家满血、敌人未清"。帧数随机，正是因为失焦发生的时刻随机。
+
+**实测证据**：加固后某次运行结果行为 `(focus pauses: 1)` 且 **64 项检查全部通过** —— 证明失焦确实发生且被正确恢复。
+（早前尝试用 `SetForegroundWindow` 主动注入失焦，返回 `True` 但 `focus pauses` 仍为 0，说明 `--disable-render-loop` 配置下 OS 焦点事件不总是投递；因此不能只依赖注入复现，需靠计数观测。）
+
+**第二层：失败后访问空 Boss 触发协程中断 → 永不 `quit()` → 套件挂起**
+
+普通房间的 `room.boss` 为 `Nil`。房间未清时状态未进入 Boss 房，后续代码仍执行 `_run.room.boss.health.current_health`，在协程内抛错，`await` 永不返回，`quit()` 永不执行 ⇒ 挂起直到外部超时（383 s / 300 s 观测值）。这与 `export_smoke_test.gd` 早前修过的同类缺陷同源。
+
+### 9.3 修复（全部位于 `godot/tests/`）
+
+| 文件 | 改动 | 作用 |
+| --- | --- | --- |
+| `room_integration_test.gd` | `_fight()` 循环内检测 `PAUSED` → `_focus_pauses += 1` 后调用 `_run.resume()` | 失焦后自动恢复战斗，不再假失败 |
+| `room_integration_test.gd` | 新增 `_abort(reason)`：释放所有输入、打印 `ABORT:` 与 `INTEGRATION ABORTED:`、`quit(1)` | 预置条件不满足时 fail-fast，杜绝挂起 |
+| `room_integration_test.gd` | 鼠标捕获改为最多等待 300 帧；仍失败则 `_abort("desktop focus unavailable…")` | 区分"环境无效"与"游戏缺陷" |
+| `room_integration_test.gd` | 新增 `_find_button(text, limit)`：按文字在**当前场景**轮询查找按钮 | 移除固定帧数等待 |
+| `room_integration_test.gd` | 新增 `_await_main_menu(limit)`、`_await_new_run(previous_id, limit)` | 等条件达成而非等固定帧 |
+| `room_integration_test.gd` | `ROOM INTEGRATION RESULT` 增加 `focus pauses: N` | 让环境干扰在结果行里可见 |
+| `full_run_integration_test.gd` | `_fight_boss()` 循环内同样自动 `resume()` 并计数 | 同上 |
+| `full_run_integration_test.gd` | Boss 节点缺失时 `_check(false)` + `quit(1)` 提前结束 | 消除空 Boss 协程中断与挂起 |
+| `full_run_integration_test.gd` | `_start_from_menu()` 按**节点名** `StartRun` 轮询（原实现也是按名），捕获鼠标最多等 120 帧 | 场景切换慢时不再级联失败 |
+| `full_run_integration_test.gd` | 失败文案增加 `exit state` / `tree paused` / `boss HP` / `living` 诊断字段 | 下次失败可直接定位状态 |
+
+### 9.4 修复过程中我自己引入并修掉的三个回归（如实记录）
+
+1. **`_find_button("StartRun")` 按文字查找** → `StartRun` 是节点名、按钮文字是中文，永远找不到 ⇒ `FAIL: title has actual start button` + 挂起。**改为按节点名轮询**。
+2. **`get_tree().paused`** → 测试脚本 `extends SceneTree`，`self` 即 SceneTree，无 `get_tree()` ⇒ 解析错误。**改用 `paused`**。
+3. **`_await_new_run(_run)` 传被释放对象** → 重启后旧 `RunManager` 已 freed，传入强类型参数报 `Invalid type … (previously freed)` ⇒ 3/3 全部挂起。**改为传 `instance_id`**。
+
+### 9.5 加固后实测（真实数字）
+
+| 批次 | 结果 |
+| --- | --- |
+| `full-run-integration` 连跑 4 次 | 4/4 通过，64 checks / 0 failures，11.3–11.7 s |
+| `full-run-integration` 连跑 3 次 | 3/3 通过，其中 **2 次 `focus pauses: 1`**（失焦被兜住） |
+| 全量 21 项套件 ×3 | 2 次 **21/21 全绿（872 断言 0 失败）**；1 次 `room-integration` 因 300 帧（≈5 s）内窗口始终未获焦点而 `ABORT`，**同轮 headless 501 断言 0 失败** |
+
+### 9.6 结论与不夸大声明
+
+- 失败根因为**桌面焦点竞争 + 测试固定帧等待**，**不是游戏逻辑缺陷**；游戏本身在失焦时暂停是正确行为。
+- 加固后图形套件从"间歇假失败 + 挂起"变为"自动恢复或明确标注环境无效"，**但无法宣称 100% 确定性通过**：本机为共享桌面，外部窗口可随时抢焦点。
+- **未通过放宽断言来让结果变绿**：所有断言强度保持不变，`focus pauses` 与 `ABORT` 均为新增可见性，不是豁免。
+- 交付产物未受影响：`tests/` 不进 pck，pck 哈希未变。
