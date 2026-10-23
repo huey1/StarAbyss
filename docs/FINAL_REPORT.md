@@ -282,6 +282,22 @@ p7_vfx_* (9 张)     1886x1061  lum 132.1–135.0  colours 312–368  black 0.1%
 
 **诚实标注**：作者与验收方均**无图像输入能力**，上述证据是像素统计与帧间差异量化，**不是肉眼审阅**。
 
+**L4 原生输入的截图证据（Lead 用 `screenshot_check.py` 独立复核 QA 的 10 张 1280×720 截图）**：
+
+```
+native_input_before.png (主菜单)        lum  25.4±27.14  colours 117  black 0.0%
+native_input_baseline_start.png (同上)  lum  25.4±27.14  colours 117  black 0.0%
+native_input_after_start_settled.png    lum 133.6±67.28  colours 321  black 0.2%
+native_input_baseline_move.png          lum 133.7±67.18  colours 306  black 0.1%
+native_input_after_move.png             lum 133.7±67.23  colours 310  black 0.2%
+native_input_after_esc.png              lum 134.1±67.00  colours 361  black 0.1%
+
+DIFF before vs after_start_settled: mean 111.12  changed 93.9%  identical=False
+```
+
+即：主菜单读数 `25.4 / 117 色` 与 `main_menu_preview` **完全一致**，按 Enter 后变为 `133.6–134.4 / 280–321 色`
+（3D 房间），像素变化 93.9%。这不只是 QA 的自我陈述——**我用自己的工具重新算了每一张图**。
+
 ---
 
 ## 7. 上线验收标准逐条核对
