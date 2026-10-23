@@ -93,6 +93,11 @@ CHECKS: list[Check] = [
     # end-to-end by the graphical integration suites and by tools/smoke_test.gd.
     Check("robustness", ["--headless", "--fixed-fps", "60", "--audio-driver", "Dummy",
                          "--script", "res://tests/robustness_test.gd"], False),
+    # P8 design landing: proves each reviewed design item actually reached the game, with
+    # one assertion group per item (see docs/DESIGN_REVIEW.md). Kept headless so it stays
+    # deterministic and immune to the desktop-focus sensitivity of the graphical suites.
+    Check("design-landing", ["--headless", "--fixed-fps", "60", "--audio-driver", "Dummy",
+                             "--script", "res://tests/design_landing_test.gd"], False),
     # NOTE: export-smoke is intentionally NOT part of the default suites. It is an
     # external-PCK fixture (docs/BUILD_WINDOWS.md): it needs a finished .pck via
     # --main-pack, a real window with focus, and it asserts the pack excludes tests.

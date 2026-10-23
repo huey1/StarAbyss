@@ -14,6 +14,8 @@ var _stats: Label
 var _collection: Label
 var _skill: Label
 var _dodge: Label
+var _dodge_confirm: Label
+var _dodge_confirm_timer: Timer
 var _scrim: ColorRect
 var _modal: VBoxContainer
 var _card_row: HBoxContainer
@@ -39,6 +41,7 @@ func bind_run(run: RunManager) -> void:
 	run.blessings.collection_changed.connect(_on_collection_changed)
 	run.blessings.candidates_offered.connect(_on_candidates)
 	run.player.health.health_changed.connect(_on_health_changed)
+	run.player.health.blocked.connect(_on_player_blocked)
 	run.player.telemetry_updated.connect(_on_telemetry)
 	run.boss_health_changed.connect(_on_boss_health_changed)
 	run.boss_action_changed.connect(_on_boss_action_changed)
@@ -109,6 +112,22 @@ func _build() -> void:
 	_skill = _label(skill_rows, "", 24, CYAN)
 	_dodge = _label(skill_rows, "", 24, INK)
 	_label(skill_rows, "留意橙色预警，红色区域生效", 17, MUTED)
+	_dodge_confirm = _label(screen, "", 26, CYAN)
+	_dodge_confirm.name = "DodgeConfirm"
+	_dodge_confirm.position = Vector2(-400, -204)
+	_dodge_confirm.size = Vector2(364, 38)
+	_dodge_confirm.anchor_left = 1.0
+	_dodge_confirm.anchor_right = 1.0
+	_dodge_confirm.anchor_top = 1.0
+	_dodge_confirm.anchor_bottom = 1.0
+	_dodge_confirm.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_dodge_confirm.visible = false
+	_dodge_confirm_timer = Timer.new()
+	_dodge_confirm_timer.name = "DodgeConfirmTimer"
+	_dodge_confirm_timer.one_shot = true
+	_dodge_confirm_timer.process_mode = Node.PROCESS_MODE_ALWAYS
+	add_child(_dodge_confirm_timer)
+	_dodge_confirm_timer.timeout.connect(_on_dodge_confirm_elapsed)
 	_scrim = ColorRect.new()
 	_scrim.name = "ModalOverlay"
 	_scrim.color = Color(0.015, 0.035, 0.065, 0.94)
@@ -124,8 +143,10 @@ func _build() -> void:
 	var brand: Label = _label(_modal, "S T A R   A B Y S S   /   星 渊 遗 迹", 19, CYAN)
 	brand.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_title = _label(_modal, "", 52, INK)
+	_title.name = "ModalTitle"
 	_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_subtitle = _label(_modal, "", 23, MUTED)
+	_subtitle.name = "ModalSubtitle"
 	_subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_card_row = HBoxContainer.new()
 	_card_row.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -174,7 +195,7 @@ func _on_state_changed(state: RunManager.State) -> void:
 			_resume.grab_focus()
 		RunManager.State.FAILED:
 			_title.text = "探索者已倒下"
-			_subtitle.text = "本次试炼结束 · 重新开始将清空生命、祝福与房间进度"
+			_subtitle.text = _failed_cause_text()
 			_restart.grab_focus()
 		RunManager.State.STAGE_COMPLETE:
 			_title.text = "抵达晶核封印"
@@ -185,6 +206,19 @@ func _on_state_changed(state: RunManager.State) -> void:
 			_subtitle.text = "试炼胜利 · 你击败了晶核守卫，暂时平息了遗迹的侵蚀"
 			_restart.grab_focus()
 	_on_progress_changed()
+
+
+## Failure attribution (GAMEPLAY_DESIGN §5.8 G-07): which move, how much health was left and
+## how far the run got. The cause string is produced by RunManager from the existing
+## DamageInfo + the attacker's own Resource names, so the UI adds no new coupling.
+func _failed_cause_text() -> String:
+	var progress: String = "倒在第 %d 房 / 共 %d 房 · 剩余生命 %d / %d" % [
+		_run.room_index + 1, _run.rooms.size(),
+		_run.player.health.current_health, _run.player.health.max_health]
+	var closing: String = "本次试炼结束 · 重新开始将清空生命、祝福与房间进度"
+	if _run.last_hit_summary.is_empty():
+		return "%s\n%s" % [closing, progress]
+	return "%s\n最后一击：%s\n%s" % [closing, _run.last_hit_summary, progress]
 
 
 func _on_candidates(candidates: Array[BlessingDefinition]) -> void:
@@ -259,6 +293,19 @@ func _on_health_changed(current: int, maximum: int) -> void:
 	_health.text = "生命   %d / %d" % [current, maximum]
 	_health_bar.max_value = maximum
 	_health_bar.value = current
+
+
+func _on_player_blocked(_info: DamageInfo) -> void:
+	# Only a deliberate dodge i-frame counts as "perfect"; post-hit protection is not a dodge.
+	if not _run.player.health.has_invulnerability_reason(&"dodge"):
+		return
+	_dodge_confirm.text = "完美闪避"
+	_dodge_confirm.visible = true
+	_dodge_confirm_timer.start(0.6)
+
+
+func _on_dodge_confirm_elapsed() -> void:
+	_dodge_confirm.visible = false
 
 
 func _on_telemetry(_state: String, _speed: float, cooldown: float) -> void:
