@@ -255,3 +255,38 @@ func _notification(what: int) -> void:
 - 加固后图形套件从"间歇假失败 + 挂起"变为"自动恢复或明确标注环境无效"，**但无法宣称 100% 确定性通过**：本机为共享桌面，外部窗口可随时抢焦点。
 - **未通过放宽断言来让结果变绿**：所有断言强度保持不变，`focus pauses` 与 `ABORT` 均为新增可见性，不是豁免。
 - 交付产物未受影响：`tests/` 不进 pck，pck 哈希未变。
+
+---
+
+## 10. P8 设计落地（批次 1：I-1 / I-2 / I-3）
+
+**日期**：2026-10-23 · **裁定依据**：`docs/DESIGN_REVIEW.md` §3.1（批次 1）· **实现者**：game-dev（D6）
+**验证方式**：新增夹具 `godot/tests/design_landing_test.gd`（已注册为 `tools/verify.py` 的 L1 检查 `design-landing`）
+**L1 结果**：`13/13 checks，542 assertions，0 assertion failures`（既有断言**只增不删、期望值零修改**；其中新增 41 条来自本夹具）
+**改动性质**：全部是**新增反馈/文案/记录**，没有一处改动冻结玩法数值、战斗规则返回值或 `RunManager.State` 枚举。
+
+### 10.1 三元组总表（文件 → 设计条目 → 断言）
+
+| 项 | 精确改动文件 | 设计条目 | 证明断言（`godot/tests/design_landing_test.gd`） |
+| --- | --- | --- | --- |
+| **I-1 完美闪避确认** | `godot/scripts/combat/health_component.gd`（+`signal blocked`，+`has_invulnerability_reason()`）、`godot/scripts/systems/run_ui.gd`（+`DodgeConfirm` 标签、+0.6 s `Timer`、+2 个处理函数） | `GAMEPLAY_DESIGN §5.5 G-04A` / `SYSTEM_DESIGN §5.2 G-04A`；D5 裁定 **R-B：只做纯 UI 版** | `:51` `I-1 a dodge i-frame still returns 0 damage (combat rules unchanged)`<br>`:52` `I-1 a hit inside a dodge i-frame emits blocked exactly once`<br>`:53` `I-1 HUD shows 完美闪避 when the dodge i-frame blocks a hit`<br>`:56` `I-1 完美闪避 confirmation hides by itself after 0.6 s`<br>`:64-66` 普通命中：满伤 / 不触发 blocked / 不显示<br>`:71-73` 受击保护期：吸收伤害 + 触发 blocked，但**不**显示完美闪避<br>`:81` `I-1 one attack id can never report two blocks` |
+| **I-2 失败归因** | `godot/scripts/systems/run_manager.gd`（+`last_hit_summary`、+`describe_damage_source()`）、`godot/scripts/systems/run_ui.gd`（`FAILED` 分支改 `_failed_cause_text()`；`_title`/`_subtitle` 加节点名） | `GAMEPLAY_DESIGN §5.8 G-07` | `:94` 未死时不编造死因<br>`:98` `I-2 a sentinel hit names the sentinel and the move that landed (遗迹哨兵 · 哨兵横扫（10 伤害）)`<br>`:100` 报这一招的伤害而非溢出量<br>`:101` 空 source 降级为「未知来源」<br>`:107` `I-2 death still enters FAILED (state machine untouched)`<br>`:110` `I-2 the failure screen shows 最后一击 with the attacker and move`<br>`:112` `I-2 the failure screen shows the room reached and the remaining health`<br>`:128`/`:131` Boss 分支走正式转场取真实实例 →「晶核守卫 · 重锤横扫（25 伤害）」 |
+| **I-3 新手引导 4 项** | `godot/scripts/systems/run_ui.gd`（底部操作行文案；`OnboardingHint` **独立标签**+6 s `Timer`；`damaged` 订阅；`CHOOSING` 副标题；`_objective` 加节点名） | `GAMEPLAY_DESIGN §4.4 ONB-1/2/3/4` | **ONB-1** `:151` `I-3 ONB-1 the control row lists E 星刃斩 and Shift 闪避`<br>**ONB-2** `:157` 首战即显示；`:158` 文案含 `0.45` 与 `0.10–0.30`；`:160` `_objective` 文本未变；`:163` 6 s 后隐藏；`:168` 离开再回战斗不重复<br>**ONB-3** `:174` 10 伤害不触发；`:178` 20+ 触发且文案为「橙色是预警 · 红色才生效」；`:180` 含「走出红区可免伤」；`:182` 6 s 后隐藏<br>**ONB-4** `:189` 首次祝福弹窗写明「只能选 2 次」；`:196` 只提示一次 |
+
+### 10.2 三条硬红线的遵守证据
+
+1. **`_objective` 文本零改动**：ONB-2 的提示放在**新建的** `OnboardingHint` 标签里，`_objective` 只加了一个节点名（`ObjectiveText`）用于断言定位，`text` 赋值语句一行未改。断言 `:160` 直接复核 `存活哨兵  2 / 2`（`robustness_test.gd:67` 的契约仍成立）。
+2. **冻结数值零改动**：`receive_damage` 的返回值、`post_hit_protection`、`stagger_duration`、`_resolved_ids` 语义全部未变（`:51`/`:71` 断言显式锁住）；未触碰 12/16/24、35、HP 100、0.45/1.2、无敌帧 [0.10,0.30)、45/350 HP、20/25 伤害中的任何一个数字。
+3. **`RunManager.State` 枚举零改动**：`:107` 断言死亡仍进 `FAILED`；I-2 只新增 `last_hit_summary` 与一个纯反查函数。
+
+### 10.3 实现中发现的三个事实（写下来避免后人重踩）
+
+1. **`blocked` 信号必须由 UI 按原因过滤**：`is_invulnerable()` 同时包含「闪避 i-frame」与「受击后 0.5 s `post_hit_protection`」。若不加区分，玩家**挨打之后**也会看到"完美闪避"，等于骗人。故新增 `has_invulnerability_reason(&"dodge")`，只有闪避 i-frame 才显示（`:73` 锁住）。设计稿 G-04A 未提这一点，属实现期补充判断，已报 Lead 并获确认。
+2. **预警配色以代码为准核实通过**：`godot/scenes/enemies/sentinel.tscn:84-85` 为 `active_color = Color(1, 0.12, 0.03, 0.65)`（红）/ `warning_color = Color(1, 0.45, 0.05, 0.30)`（橙）；`godot/scenes/boss/core_guardian.tscn:2` 继承 `sentinel.tscn`，因此 Boss 同样橙→红。`scripts/combat/weapon_visual.gd:6-7` 的默认值是青色，但被上面两处场景覆盖，**不是实际显示色**。故 ONB-3 文案「橙色是预警 · 红色才生效」与游戏一致，既有 HUD 行「留意橙色预警，红色区域生效」同样准确，未改。
+3. **`core_guardian.tscn` 不能脱离房间单独 `instantiate`**：其 `EnemyBrain.target_path` 指向 `../../Player`，脱离房间会打出 `SCRIPT ERROR: Node not found` + `Assertion failed`，而 `tools/verify.py` 会把 `SCRIPT ERROR` 判为失败。夹具改为走正式转场（`room_index=1` → `TRANSITION` → `_advance_room()`）取真实 Boss 实例。
+
+### 10.4 夹具自身的两个问题（已修，如实记录）
+
+1. **退出时 2 个 `AudioStreamWAV`/`AudioStreamPlaybackWAV` 泄漏**：夹具结束时伤害音效仍在播放。用 `create_timer(0.25)` 等待**无效**——`--fixed-fps 60` 下模拟 0.25 s 只需几毫秒真实时间（与 DEF-03 同源）。改为**墙钟** `Time.get_ticks_msec()` 等待 250 ms，并在 teardown 先调 `RunAudio.stop_all()`。现输出无 `leaked` 警告。
+2. **编辑中间态污染总闸门**：我先用多次 `edit` 追加断言，Lead 在中间态采样到 `Parse Error: Too many arguments for "find_child()"` 而红了一次（OBS-01 同类）。**此后夹具一律整文件 `write` 一次落盘，落盘后先单跑确认可解析再报。**
+

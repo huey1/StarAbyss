@@ -79,6 +79,7 @@ func _build() -> void:
 	_room = _label(room_rows, "", 27, INK)
 	_room.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_objective = _label(room_rows, "", 20, CYAN)
+	_objective.name = "ObjectiveText"
 	_objective.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	# ONB-2/ONB-3 hints live in their own label. _objective is never rewritten: its text is
 	# locked by robustness_test.gd ("存活哨兵  2 / 2"), so onboarding must not touch it.

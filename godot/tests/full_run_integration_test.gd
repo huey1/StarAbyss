@@ -112,6 +112,9 @@ func _start_from_menu() -> void:
 		_abort("start button did not open a run")
 		return
 	_bind()
+	# Same reason as room_integration_test: restore the real precondition (window owns the
+	# foreground) before asserting that starting a run captured the mouse.
+	DisplayServer.window_move_to_foreground()
 	for frame: int in range(120):
 		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			break

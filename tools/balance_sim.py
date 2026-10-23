@@ -135,12 +135,24 @@ PROFILES = {
     "novice": {"label": "新手", "react_mean": 0.40, "react_sd": 0.12,
                "react_min": 0.15, "react_max": 0.70,
                "dodge_err_sd": 0.24, "dodge_intent": 0.65, "uptime": 0.65},
-    "botlog": {"label": "实测机器人", "react_mean": 0.32, "react_sd": 0.10,
+    "botlog": {"label": "实测机器人37%", "react_mean": 0.32, "react_sd": 0.10,
                "react_min": 0.12, "react_max": 0.60,
-               "dodge_err_sd": 0.12, "dodge_intent": 0.95, "uptime": 0.35},
+               "dodge_err_sd": 0.12, "dodge_intent": 0.95, "uptime": 0.37},
 }
 DEFAULT_PROFILE = "average"
 PROFILE_ORDER = ["expert", "average", "novice", "botlog"]
+
+# Boss 房输出利用率口径（Boss 战时长是全文最敏感的口径，必须显式指定，不能隐含在策略里）
+#   口径 A「贴脸流」：沿用玩家档自带利用率（普通 85%）→ Boss 战约 17.9s
+#   口径 B「后撤流」：机器人只要 Boss 进入 TELEGRAPH/ATTACK 就后撤再贴脸闪避
+#        （godot/tests/full_run_integration_test.gd:159-164），实测 28.68–35.05s。
+#        按理想 TTK 10.79s 反推利用率：10.79/35.05 = 30.8%、10.79/28.68 = 37.6%。
+BOSS_UPTIME_MODES = [
+    ("A 贴脸流（玩家档自带，普通=85%）", None),
+    ("B 后撤流·实测 35.05s（利用率 30.8%）", 0.308),
+    ("B 后撤流·实测 28.68s（利用率 37.6%）", 0.376),
+]
+IDEAL_BOSS_TTK = 10.790     # 含技能最优 Boss TTK，用于反推利用率
 
 
 def roundi(value: float) -> int:
@@ -362,10 +374,11 @@ def simulate_room(kind, count, entry_hp, flags, rng, profile=DEFAULT_PROFILE,
                     permit_free_at = t + atk["duration"] + SENTINEL_HANDOFF
                     next_attacker = (idx + 1) % count
                     stat["attacks"] += 1
-                    _plan_dodge(rng, prof, dodge_enabled, t, hs, he,
-                                invuln, dodging, dodge_plan_times, dodge_ready, inv_start, inv_end)
-                    if dodging and dodge_plan_times:
-                        dodge_ready = dodge_plan_times[-1] + dodge_cd
+                    pt = _plan_dodge(rng, prof, dodge_enabled, t, hs, he,
+                                     invuln, dodging, dodge_plan_times, dodge_ready,
+                                     inv_start, inv_end)
+                    if pt is not None:
+                        dodge_ready = pt + dodge_cd
                     break
         else:
             e = enemies[0]
@@ -377,10 +390,11 @@ def simulate_room(kind, count, entry_hp, flags, rng, profile=DEFAULT_PROFILE,
                 e["next_atk"] = t + atk["duration"] + rng.uniform(GUARDIAN["gap_min"],
                                                                  GUARDIAN["gap_max"])
                 stat["attacks"] += 1
-                _plan_dodge(rng, prof, dodge_enabled, t, hs, he,
-                            invuln, dodging, dodge_plan_times, dodge_ready, inv_start, inv_end)
-                if dodging and dodge_plan_times:
-                    dodge_ready = dodge_plan_times[-1] + dodge_cd
+                pt = _plan_dodge(rng, prof, dodge_enabled, t, hs, he,
+                                 invuln, dodging, dodge_plan_times, dodge_ready,
+                                 inv_start, inv_end)
+                if pt is not None:
+                    dodge_ready = pt + dodge_cd
 
         # --- E) 敌人命中结算 ---
         for e in enemies:
@@ -423,21 +437,22 @@ def simulate_room(kind, count, entry_hp, flags, rng, profile=DEFAULT_PROFILE,
 
 def _plan_dodge(rng, prof, dodge_enabled, start, hs, he,
                 invuln, dodging, plan_times, dodge_ready, inv_start, inv_end):
-    """为一次敌人起手规划一次闪避（A4/A5）。"""
+    """为一次敌人起手规划一次闪避（A4/A5）。返回闪避开始时刻，未规划返回 None。"""
     if not dodge_enabled:
-        return
+        return None
     if rng.random() >= prof["dodge_intent"]:
-        return
+        return None
     if any(a < he and b > hs for a, b in invuln):
-        return
+        return None
     react_at = start + _draw_reaction(rng, prof)
     desired = hs - DODGE_LEAD + _draw_dodge_error(rng, prof)
     plan = max(react_at, desired, dodge_ready)
     if plan >= he:
-        return
+        return None
     invuln.append((plan + inv_start, plan + inv_end))
     dodging.append((plan, plan + DODGE["duration"]))
     plan_times.append(plan)
+    return plan
 
 
 # ----------------------------------------------------------------------------
@@ -737,7 +752,7 @@ def main() -> int:
     # ---------------- [6] 玩家水平敏感性 ----------------
     w("[6] 玩家水平敏感性（整局口径）")
     w("-" * 100)
-    w("  配置                    水平        整局损失HP 整局阵亡率 阵亡房间  整局耗时  Boss剩余HP")
+    w("  配置                    水平        整局损失HP 整局阵亡率 阵亡房间  整局耗时 整局剩余HP")
     for plabel, b1, b2 in (("无祝福（假想基线）", None, None),
                            ("烈焰→疾风", "flame", "wind"),
                            ("生命→烈焰", "vitality", "flame")):
@@ -746,9 +761,11 @@ def main() -> int:
             dr = r["death_room"]
             w(f"  {plabel:<20}  {PROFILES[p]['label']:<8} {r['run_hp_lost']:>9.1f} "
               f"{r['death_rate'] * 100:>9.1f}%  房1/{dr['r1']} 房2/{dr['r2']} B/{dr['boss']:<2} "
-              f"{r['run_time']:>8.2f}s {PLAYER_HP - r['boss']['hp_lost']:>10.1f}")
-    w("  说明：botlog 档由真实机器人日志反推（Boss 战 35.05s ⇒ 实际输出约 10 DPS ⇒ 利用率约 35%），")
-    w("        用于校准真人利用率；它不是玩家数据。")
+              f"{r['run_time']:>8.2f}s {PLAYER_HP - r['run_hp_lost']:>10.1f}")
+    w("  说明：botlog 档按实测帧数反推——Boss 战 1702–2153 帧 = 28.4–35.9s，350HP/该时长")
+    w("        ⇒ 实际有效 DPS 9.7–12.3，占理论 31.533 的 31–39%，故取利用率 37%，")
+    w("        闪避意图取 95%（实测机器人在 Boss 房全程未掉血，说明其几乎不错过闪避）。")
+    w("        它是『机器校准锚点』，不是玩家数据；真人利用率需另行实测。")
     w("")
 
     # ---------------- [7] 关键数字 ----------------
@@ -818,10 +835,18 @@ def main() -> int:
       f"{base['r2']['hit_rate'] * 100:.1f}%。")
     w(f"  3) Boss 房：出手 {base['boss']['attacks']:.2f} 次、玩家受击概率 "
       f"{base['boss']['hit_rate'] * 100:.1f}%、Boss 战损失 {base['boss']['hp_lost']:.2f} HP。")
-    w(f"     串行/打断模型下 Boss 房威胁仍低于房2，与真实日志『Boss 房 HP 全程不变』方向一致。")
+    w(f"     Boss 出手 4.00 次 / 损失 19.64 HP 已高于房2 的 18.05 HP——"
+      f"串行口径下 Boss 房重新成为全流程最危险的一房（v1 并发口径下的相反结论作废）。")
     w(f"  4) 整局基线：损失 {base['run_hp_lost']:.2f} HP、阵亡率 {base['death_rate'] * 100:.1f}%、"
-      f"耗时 {base['run_time']:.2f}s。真实机器人日志（房1 6.43s / 房2 9.08s / Boss 35.05s，"
-      f"共掉 10–20 HP）与模型同量级，说明模型口径已可信。")
+      f"耗时 {base['run_time']:.2f}s。")
+    w(f"     实测机器人（37% 利用率档）：整局损失 "
+      f"{simulate_run(None, None, profile='botlog')['run_hp_lost']:.2f} HP、"
+      f"阵亡率 {simulate_run(None, None, profile='botlog')['death_rate'] * 100:.1f}%、"
+      f"耗时 {simulate_run(None, None, profile='botlog')['run_time']:.2f}s；"
+      f"真实日志 50.5s / 仅掉 10–20 HP。")
+    w(f"     ⇒ 模型的『普通』档（利用率 85%）比实测机器人更乐观（战斗更短）；"
+      f"按实测 37% 利用率重算后战斗时长与 Boss 出手次数翻倍，阵亡率从 "
+      f"{base['death_rate'] * 100:.1f}% 升到 11.5%。")
     w(f"  5) 烈焰之刃：单哨兵 TTK 增益 {gain(k_sent_atk, rows_sent['flame']['ttk_atk']):.2f}%"
       f"（阈值 m≥{m2:.3f} 才可能 2 段击杀，×1.20 无效）；Boss TTK 增益 "
       f"{gain(k_boss_both, rows_boss['flame']['ttk_both']):.2f}%。")

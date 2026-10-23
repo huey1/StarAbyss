@@ -31,6 +31,12 @@ func _test() -> void:
 	current_scene = _run
 	_bind()
 	await _ticks(5)
+	# The game can only capture the mouse while its OS window owns the foreground. On an
+	# unattended desktop another window can hold it for seconds, which used to fail the
+	# capture assertion for reasons unrelated to the game. A real player clicking the
+	# window always has the foreground, so claiming it here restores the real precondition
+	# instead of weakening the assertion.
+	DisplayServer.window_move_to_foreground()
 	for frame: int in range(300):
 		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			break

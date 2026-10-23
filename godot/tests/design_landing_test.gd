@@ -3,12 +3,13 @@ extends SceneTree
 ##
 ## Covers exactly the three batch-1 items of docs/DESIGN_REVIEW.md §3.1 and nothing else.
 ## Every assertion here is NEW; no existing suite is modified, and no expectation of the
-## frozen 501 L1 assertions is touched.
+## frozen L1 assertions is touched.
 ##   I-1 perfect-dodge confirmation  -> GAMEPLAY_DESIGN §5.5 G-04A (SYSTEM_DESIGN §5.2)
 ##   I-2 failure attribution         -> GAMEPLAY_DESIGN §5.8 G-07
 ##   I-3 onboarding ONB-1..ONB-4     -> GAMEPLAY_DESIGN §4.4
 ##
 ## Direct HealthComponent calls are used so the fixture never depends on enemy AI timing.
+## Registered in tools/verify.py as the headless check "design-landing".
 
 var _checks: int = 0
 var _failures: int = 0
@@ -24,6 +25,7 @@ func _test() -> void:
 	await _test_dodge_confirmation()
 	await _test_fail_attribution()
 	await _test_boss_attribution()
+	await _test_onboarding()
 	print("DESIGN LANDING RESULT: %d checks, %d failures" % [_checks, _failures])
 	quit(0 if _failures == 0 else 1)
 
@@ -50,7 +52,7 @@ func _test_dodge_confirmation() -> void:
 	_check(_blocked_count == 1, "I-1 a hit inside a dodge i-frame emits blocked exactly once")
 	_check(confirm.visible and confirm.text.contains("完美闪避"), "I-1 HUD shows 完美闪避 when the dodge i-frame blocks a hit")
 
-	await create_timer(0.75).timeout
+	await _wait_seconds(0.75)
 	_check(not confirm.visible, "I-1 完美闪避 confirmation hides by itself after 0.6 s")
 
 	# 2. A normal hit must behave exactly as before and must not claim a perfect dodge.
@@ -114,8 +116,6 @@ func _test_fail_attribution() -> void:
 	await _teardown()
 
 
-# --- I-2 boss branch: real guardian wiring, not a standalone instantiation ---------
-
 func _test_boss_attribution() -> void:
 	await _fresh()
 	# Walk the production transition path instead of instantiating the boss alone:
@@ -130,6 +130,73 @@ func _test_boss_attribution() -> void:
 		var cause: String = _run.describe_damage_source(DamageInfo.create(25.0, boss, 2))
 		_check(cause.contains("晶核守卫") and cause.contains("重锤横扫"),
 			"I-2 a guardian hit names 晶核守卫 and its move (%s)" % cause)
+	await _teardown()
+
+
+# --- I-3 新手引导 ONB-1..4 (§4.4) -------------------------------------------
+
+func _test_onboarding() -> void:
+	await _fresh()
+	var ui: RunUI = _run.ui
+	var player: PlayerController = _run.player
+	var hint: Label = ui.find_child("OnboardingHint", true, false) as Label
+	var objective: Label = ui.find_child("ObjectiveText", true, false) as Label
+	var subtitle: Label = ui.find_child("ModalSubtitle", true, false) as Label
+	_check(hint != null and objective != null and subtitle != null, "I-3 the onboarding labels exist as their own nodes")
+	if hint == null or objective == null or subtitle == null:
+		await _teardown()
+		return
+
+	# ONB-1: the bottom control row lists the two abilities players forget.
+	_check(_has_label_containing(ui, "E 星刃斩") and _has_label_containing(ui, "Shift 闪避"),
+		"I-3 ONB-1 the control row lists E 星刃斩 and Shift 闪避")
+	_check(_has_label_containing(ui, "Space 跳跃") and _has_label_containing(ui, "鼠标转镜头"),
+		"I-3 ONB-1 the earlier control hints survive the extension")
+
+	# ONB-2: one 6 s hint on the first live combat, stating the real magnitudes.
+	_check(hint.visible, "I-3 ONB-2 the first live combat shows the dodge hint")
+	_check(hint.text.contains("0.45") and hint.text.contains("0.10–0.30"),
+		"I-3 ONB-2 the hint states the real numbers (0.45 s dodge, only 0.10–0.30 s i-frames)")
+	_check(objective.text.contains("存活哨兵  2 / 2"),
+		"I-3 ONB-2 the objective label keeps its frozen text (robustness_test contract)")
+	await _wait_seconds(6.3)
+	_check(not hint.visible, "I-3 ONB-2 the dodge hint hides itself after 6 s")
+	_run.pause()
+	await _frames(2)
+	_run.resume()
+	await _frames(2)
+	_check(not hint.visible, "I-3 ONB-2 leaving and re-entering combat does not show the hint twice")
+
+	# ONB-3: only a Boss-grade hit earns the colour legend, and it must match the shipped scene.
+	player.health.protection_remaining = 0.0
+	player.health.receive_damage(10, DamageInfo.create(10.0, null, 2))
+	await _frames(2)
+	_check(not hint.visible, "I-3 ONB-3 an ordinary 10-damage hit does not trigger the colour legend")
+	player.health.protection_remaining = 0.0
+	player.health.receive_damage(20, DamageInfo.create(20.0, null, 2))
+	await _frames(2)
+	_check(hint.visible and hint.text.contains("橙色是预警") and hint.text.contains("红色才生效"),
+		"I-3 ONB-3 a 20+ hit explains the orange warning and the red active window")
+	_check(hint.text.contains("走出红区可免伤"), "I-3 ONB-3 the colour legend also says how to avoid the damage")
+	await _wait_seconds(6.3)
+	_check(not hint.visible, "I-3 ONB-3 the colour legend hides itself after 6 s")
+
+	# ONB-4: the first reward modal says how many picks a run has.
+	for enemy: SentinelController in _run.room.enemies:
+		enemy.health.receive_damage(45, DamageInfo.create(45.0, _run.player, 1))
+	await _frames(8)
+	_check(_run.current_state == RunManager.State.CHOOSING, "I-3 ONB-4 clearing the room still opens the reward modal")
+	_check(subtitle.text.contains("只能选 2 次"), "I-3 ONB-4 the first reward modal states that a run only offers 2 picks")
+	var first_id: StringName = _run.blessings.candidates[0].id
+	_run.select_blessing(first_id)
+	await _frames(4)
+	_check(_run.blessings.acquired.size() == 1, "I-3 ONB-4 choosing a card still acquires exactly one blessing")
+	_run.pause()
+	await _frames(2)
+	_check(not subtitle.text.contains("只能选 2 次"), "I-3 ONB-4 the pick-count reminder is only shown on the first pick")
+	_run.resume()
+	await _frames(2)
+
 	await _teardown()
 
 
@@ -176,6 +243,20 @@ func _teardown() -> void:
 func _ticks(count: int) -> void:
 	for index: int in range(count):
 		await physics_frame
+		await process_frame
+
+
+## Idle frames only: safe while the tree is paused (physics frames are not required).
+func _frames(count: int) -> void:
+	for index: int in range(count):
+		await process_frame
+
+
+## Simulated seconds. The registered check runs with --fixed-fps 60, so one idle frame is
+## exactly 1/60 s; counting frames keeps the wait independent of wall-clock speed.
+func _wait_seconds(seconds: float) -> void:
+	var frames: int = int(ceil(seconds * 60.0))
+	for index: int in range(frames):
 		await process_frame
 
 
