@@ -56,11 +56,25 @@
 
 - **引擎**：`D:\game\apps\godot\Godot_v4.7.2-stable_win64.exe`（图形）/ `..._console.exe`（日志输出）。`--version` = `4.7.2.stable.official.ed1daf0bf`。
 - **工程路径**：`D:\game\StarAbyss\godot`（`project.godot` 所在）。
+- **硬件实测**：GPU **NVIDIA GeForce RTX 3050**、Vulkan 1.4.325、Forward+、CPU i7-12700F。README 旧述的 GTX 1660 SUPER 不作数。
 - **Python**：无 `python` 命令可用，用 `py` 启动器：`C:\Users\hongxinyu\AppData\Local\Programs\Python\Launcher\py.exe`（3.14 与 3.10）。**不要**调用 `python`。
 - **PowerShell**：机器只有 Windows PowerShell 5.1，**没有 pwsh 7**，因此 `tools/verify.ps1`（`#Requires -Version 7.0`）**无法直接运行**；请用 `py tools/verify.py`。
 - **APPDATA**：跑引擎时设为 `D:\game\StarAbyss\.local\appdata`，避免污染用户 Godot 设置。`tools/verify.py` 已内置。
-- **已知无害日志**：`ERROR: Failed to read the root certificate store.` 与 `Error saving editor settings to` 由沙箱/重定向 APPDATA 引起，不是游戏缺陷；`tools/verify.py` 已过滤。其他 `ERROR:`/`SCRIPT ERROR:` 一律视为失败。
-- **资源引用校验**：当前 171 处 `res://` 引用全部可解析。
+- **🔴 写盘限制（最关键的一条，P7 期间实测发现）**：本验证环境**禁止 Godot 进程写工作区 `D:\game` 之外的任何路径**。真实 `%APPDATA%`、`%LOCALAPPDATA%`、`%TEMP%` 全部写不进去，`FileAccess` 直接报 error 12。
+  后果：`--import` 会报"Could not create editor cache directory"；`--export-pack/--export-release` 写临时 `project.binary` 失败，**仍返回退出码 0，但包里 `project.binary` 是 0 字节 → 包不可启动（静默失败）**。
+  因此**导入/导出前必须重定向四个变量**：
+  ```powershell
+  $env:APPDATA      = 'D:\game\StarAbyss\.local\appdata'
+  $env:LOCALAPPDATA = 'D:\game\StarAbyss\.local\localappdata'
+  $env:TEMP         = 'D:\game\StarAbyss\.local\temp'
+  $env:TMP          = 'D:\game\StarAbyss\.local\temp'
+  ```
+  导出模板也必须放在工作区内（`%APPDATA%` 不可写），由 `export_presets.cfg` 的 `custom_template/release` 显式指向。
+  **不变量**：构建过程不得需要写工作区之外的任何路径。
+- **🔴 并发限制**：多个 Godot 进程同时操作同一工程的 `.godot` 缓存会导致 `--editor --import` 以 `3221225477`（0xC0000005）崩溃。**导入/导出必须独占工程**；图形检查需独占窗口（注入的鼠标事件会被真实鼠标污染）。
+- **已知无害日志**：`ERROR: Failed to read the root certificate store.` 由沙箱引起，不是游戏缺陷；其余 `ERROR:`/`SCRIPT ERROR:` 一律视为失败。`tools/verify.py` 只过滤这一条（以及重定向后可消除的 editor settings 行）。
+- **资源引用校验**：当前 186 处 `res://` 引用全部可解析。
+- **包验收工具**：`tools/pack_audit.gd`（headless，75 项断言：27 音频 cue 存在且可解码、7 场景、7 GLB、4 项测试未泄漏、主场景设置）、`tools/pack_diagnose.gd`（包结构诊断）。
 
 ## 6. 风险与应对
 

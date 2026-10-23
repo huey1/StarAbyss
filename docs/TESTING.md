@@ -1,4 +1,95 @@
-# P6 验收记录与人工测试
+# Star Abyss 测试记录与验证方法
+
+本文件由 QA 维护。**当前有效的测试分层、命令与结果见「P7」章节**。P6 及更早章节是历史验收记录，其中出现的 PowerShell 7 命令（`pwsh -File tools/verify.ps1`）、`E:\share\Godot_v4.7\...` 引擎路径和 GTX 1660 SUPER 显卡只描述当时的执行环境，**不代表当前机器**（本机无 pwsh 7，引擎在 `D:\game\apps\godot\`，显卡为 RTX 3050）。
+
+## P7 测试分层与验证方法（当前有效）
+
+日期：2026-10-23（Asia/Shanghai）。P7 范围：音效/VFX 打磨、性能实测、Windows 导出与可运行包验收；玩法范围不变。
+
+### 1. 四层证据链（缺一层就有覆盖空洞）
+
+| 层 | 验证什么 | 怎么跑 | 不能证明什么 |
+| --- | --- | --- | --- |
+| L1 headless | 规则、数值、状态机、AI 行为、流程、音频资源、VFX 资源。无窗口，`--headless`，可控且快 | `py tools\verify.py --headless-only` | 窗口、Forward+ 渲染、真实鼠标、注入输入的完整局 |
+| L2 图形 | 真实窗口 + Forward+ 渲染 + 注入键鼠 + 真实物理步进，含三房通关闭环 | `py tools\verify.py` | 发布包本身（跑的是工程源码） |
+| L3 打包数据 | 最终 PCK 内的数据完整可玩（无测试源码、主菜单、真实点击、移动/技能、暂停、重开、返回菜单） | `py tools\verify.py --packed <你的.pck> --only export-smoke` | 真实 exe 的原生输入（官方 release 模板禁止脚本注入） |
+| L4 发布 exe 原生输入 | 真实 `StarAbyss.exe` 在 OS 级注入（Win32 鼠标/键盘）下场景确实响应 | 见 `.local/validation/native_input_*.png` 与报告 | 完整闭环（该层只做画面差异佐证，闭环由 L2+L3 覆盖） |
+
+### 2. 运行器与命令
+
+本机**只有 Windows PowerShell 5.1，没有 pwsh 7**，`tools/verify.ps1`（`#Requires -Version 7.0`）**不可用**。一律使用 Python 运行器（无 `python` 命令，需 `py` 启动器）：
+
+```powershell
+$PY = "C:\Users\hongxinyu\AppData\Local\Programs\Python\Launcher\py.exe"
+cd D:\game\StarAbyss
+
+# L1 headless 全量
+& $PY tools\verify.py --headless-only --json .local\validation\baseline_headless.json
+
+# L2 图形全量（需要独占窗口，勿移动鼠标）
+& $PY tools\verify.py --json .local\validation\full_graphical.json
+
+# 单项
+& $PY tools\verify.py --only full-run-integration
+& $PY tools\verify.py --only import,audio-feedback,vfx-headless
+
+# L3 打包数据夹具（需要已导出的 pck）
+& $PY tools\verify.py --packed builds\windows\star_abyss_windows_x64\StarAbyss.pck --only export-smoke
+
+# 直接跑单个测试脚本（调试用；务必也重定向两个用户目录，否则编辑器缓存会报 ERROR）
+$env:APPDATA='D:\game\StarAbyss\.local\appdata'
+$env:LOCALAPPDATA='D:\game\StarAbyss\.local\localappdata'
+& 'D:\game\apps\godot\Godot_v4.7.2-stable_win64_console.exe' --path godot --headless `
+    --fixed-fps 60 --audio-driver Dummy --script res://tests/robustness_test.gd
+```
+
+运行器行为要点：每个检查是独立引擎进程；`APPDATA` 与 `LOCALAPPDATA` 都重定向到 `.local/` 下（前者存编辑器设置，后者存编辑器文档缓存，两个都要改否则 import 会报 3 条缓存 ERROR）；任一非零退出码、或未过滤的 `SCRIPT ERROR:` / `ERROR:` / `FAIL:` 行都判失败；`--json` 输出可机器核对的汇总。
+
+### 3. 环境约束（踩过的坑，务必遵守）
+
+1. **无 pwsh 7** → 用 `py tools\verify.py`，不要用 `tools/verify.ps1`。
+2. **必须同时重定向 `APPDATA` 与 `LOCALAPPDATA`**。只改前者时，Godot 4.7 的编辑器文档缓存目录（`editor_paths.cpp:237`）取 `%LOCALAPPDATA%`，在受限环境下创建失败，会打 3 条 `ERROR` 让 `import` 恒失败（已由运行器修复）。
+3. **引擎导入/导出必须独占工程**：多个 Godot 进程同时写同一工程的 `.godot/` 导入缓存会造成访问冲突崩溃（实测退出码 `3221225477` = `0xC0000005`）。跑 `--editor --import`、导出、或改动源码后的首次导入前，用 `Get-Process *Godot*` 确认没有其他引擎进程。
+4. **图形检查独占窗口**：图形套件会真实开窗并注入键鼠；运行期间移动鼠标或切换窗口焦点会污染注入事件导致假失败（失焦还会触发游戏自动暂停）。多 Agent 共用本机时，开跑前报备、跑完立即释放。
+5. **已知无害日志**：`Failed to read the root certificate store.`、`Can't save resource to empty path`、`Error saving editor settings to` 由沙箱与重定向用户目录引起，运行器已列入忽略名单。其余错误一律算失败。
+6. 每阶段超时：普通 300 s、`import` 600 s、`full-run-integration` 与 `performance` 900 s。
+
+### 4. 用例清单与当前结果
+
+**L1 headless（11 项，`--headless-only`）**
+
+| 检查 | 断言数 | 覆盖 |
+| --- | --- | --- |
+| import | – | 工程可导入，资源无解析错误 |
+| main-headless | – | 配置主场景运行 120 物理步后干净释放 |
+| combat-rules | 28 | 三段/技能数值、伤害、范围角度、无敌、硬直、回血 |
+| enemy-rules | 20 | 哨兵数值、攻击名额协调、导航数据 |
+| enemy-behavior | 51 | 追击、预警先于伤害、单次命中、归巢、动态阻挡 |
+| blessing-rules | 24 | 同种子候选、唯一性、三种祝福实际效果、封顶回血 |
+| room-flow | 40 | 2/3 哨兵生成、实体门、暂停冻结、跨房保留、重开 |
+| guardian-behavior | 44 | Boss 两招数值、预警、单次命中、轮换、胜负清理 |
+| art-headless | 96 | 蒙皮/骨骼/动作轨迹/材质/碰撞保留的静态与采样校验 |
+| audio-feedback | 见报告 | 音频资源格式/电平/循环，cue 表与 manifest 双向一致，运行时 cue 生命周期 |
+| vfx-headless | 见报告 | VFX 节点池、命中/死亡/预警表现、判定范围未变 |
+
+**L2 图形（9 项，不加 `--headless-only`）**：main-window（真实窗口启动）、art-rendering（Forward+ 真实帧 + 截图）、vfx-rendering、input-physics（WASD/跳跃/闪避/镜头 + 真实鼠标事件）、combat-integration、enemy-integration、room-integration（实际 Esc/卡片点击/走门）、full-run-integration（菜单点击→2哨兵→祝福→3哨兵→祝福→Boss 350HP→胜利/失败→重开/返回菜单，连续三局）、performance（帧时间/draw call 采样）。
+
+**L3 打包数据（1 项，需 `--packed`）**：export-smoke，15 项断言（含包内无测试源码、主菜单真实点击、骨骼/武器加载、移动/技能输入、Esc 暂停、重开、返回菜单、游戏帧截图）。
+
+**QA 新增补充用例**：`godot/tests/robustness_test.gd`（39 项，headless 与图形均可跑）。覆盖既有套件的空白：窗口失焦/恢复（`NOTIFICATION_APPLICATION_FOCUS_OUT` 触发暂停、重复失焦不损坏状态、失焦不打断祝福选择）、连续三次重开（含从暂停与失败状态重开、子节点不增长、只留一个 RoomController 实例）、重复点击同一张祝福卡不重复生效、过期 reward id 无法二次生效、UI 契约（菜单按钮、暂停弹窗按钮、祝福卡数量与按钮可见性规则、房间计数与目标文本）、帧处理时间预算代理（**不是 fps 结论**）。
+
+逐项断言数、失败数与耗时以 `docs/TEST_REPORT.md` 与 `.local/validation/*.json` 为准（本节不重复维护易过期的数字）。
+
+### 5. 未执行 / 不可自动验证项（如实记录）
+
+- **人工试玩**：手感、美术风格认可、动作过渡观感、音效听感、真实键鼠三局——需真人，自动化不能替代。
+- **L4 原生输入**：需要发布 exe 与 OS 级注入，且只能证明"画面响应"，不能证明完整闭环。
+- **真实发布 exe 的完整闭环**：官方 release 模板禁止外部脚本注入，只能由 L2（源码）+ L3（包内数据）组合证明。
+- **其他 GPU / 音频设备 / 操作系统版本**：未验证，仅在当前机器实测。
+
+---
+
+## P6 历史验收记录（2026-10-22）
 
 日期：2026-10-22（Asia/Shanghai）。用户已明确授权P6；当前完成Blender模型、蒙皮骨骼、动作时钟/方向对齐、独立武器及Toon材质。P7音效/VFX打磨、性能与Windows导出尚未开始。以下P6结果为当前验收，后面的P5–P1章节仅作历史记录。
 

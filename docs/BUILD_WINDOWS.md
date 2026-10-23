@@ -1,38 +1,106 @@
 # Windows 构建与验收
 
-P7 目标为 Windows x86_64、Godot 4.7 stable、Forward+ / Vulkan。构建使用真正的 Windows release 导出模板；编辑器负责导入/打包及独立数据包的功能脚本验证。交付目录不包含 Godot 编辑器、Blender 或测试代码。
+目标产物：Windows x86_64 绿色包（zip），解压后双击 `StarAbyss.exe` 即可运行。引擎 Godot **4.7.2 stable**、Forward+ / Vulkan、release 导出模板；包内不含 Godot 编辑器、Blender 或测试代码。
 
-## 本机模板
+发布版本号取自 `godot/project.godot` 的 `application/config/version`（当前 `1.0.0`）。
 
-最初检查 `E:/share/Godot_v4.7`、项目隔离 APPDATA、用户 Godot/export_templates 和引擎 portable/editor_data 目录，均没有已安装的模板。用户于2026-10-22明确授权从 Godot 官方下载匹配模板，缓存位置为：
+## 1. 构建前提（缺一条就不要指望构建成功）
 
-```text
-.local/export_templates/cache/Godot_v4.7-stable_export_templates.tpz
-.local/export_templates/4.7.stable/windows_release_x86_64.exe
-```
-
-官方标准模板包约1.19GB，仅提取本项目需要的 Windows release x64 可执行模板。完整压缩包的期望 SHA256 为：
+### 1.1 引擎与版本硬校验
 
 ```text
-9714459dc071907c0f3d5f17d608faf69e7cda21331fc5d39c4503ffa4e99eec
+D:\game\apps\godot\Godot_v4.7.2-stable_win64_console.exe   # 抓 stdout/日志，构建使用它
+D:\game\apps\godot\Godot_v4.7.2-stable_win64.exe           # 图形模式手动启动用
+--version → 4.7.2.stable.official.ed1daf0bf
 ```
 
-来源：[Godot 4.7 stable 官方下载页](https://godotengine.org/download/archive/4.7-stable/)与[官方发布资产校验信息](https://github.com/godotengine/godot-builds/releases/expanded_assets/4.7-stable)。不从第三方镜像下载、不改动用户的全局编辑器配置。`build_windows.ps1`不会自动下载模板；缺失时明确失败。解压前必须校验完整压缩包，再校验模板 `--version` 与编辑器版本一致。
+`tools/build_windows.py` 把 **`4.7.2.stable.official.ed1daf0bf`** 作为硬编码前置条件：编辑器版本不等于该串，或导出模板 `--version` 不等于该串，脚本立即非零退出并打印双方版本。不允许用"接近的版本"构建发布包——模板与编辑器版本不一致时，Godot 要么拒绝导出，要么打出错位的二进制。
 
-2026-10-22实际下载1,279,207,690字节，完整SHA256匹配；只提取上述Windows文件。模板SHA256为`c42eb5d17f683eb8bcd52c19a9f36ebf811b1788623878d5276a7d9ffc09f95c`，版本实测`4.7.stable.official.5b4e0cb0f`，与现有编辑器完全一致。独立微型工程已通过custom_template项目相对路径和shader_baker开启的headless release导出；这是导出能力预检，不代替正式游戏包验收。
+### 1.2 导出模板
 
-## 构建
+| 项目 | 值 |
+| --- | --- |
+| 安装目录 | `%APPDATA%\Godot\export_templates\4.7.2.stable\`（本机 = `C:\Users\hongxinyu\AppData\Roaming\Godot\export_templates\4.7.2.stable\`） |
+| 必需文件 | `windows_release_x86_64.exe` **和** `windows_debug_x86_64.exe` |
+| 预设配置 | `godot/export_presets.cfg` 的 `custom_template/debug` 与 `custom_template/release` **都置空** |
+| 官方压缩包 | `Godot_v4.7.2-stable_export_templates.tpz`，1,281,349,702 字节 |
 
-项目根目录中使用 PowerShell 7：
+**为什么两个模板都要**：即使只跑 `--export-release`，Godot 4.7.2 也会同时校验该预设的 debug 与 release 模板。只装 release 会得到：
+
+```text
+ERROR: Cannot export project with preset "Windows Desktop" due to configuration errors:
+C:/Users/<user>/AppData/Roaming/Godot/export_templates/4.7.2.stable/windows_debug_x86_64.exe
+C:/Users/<user>/AppData/Roaming/Godot/export_templates/4.7.2.stable/windows_release_x86_64.exe
+```
+
+**为什么用标准目录 + 置空 `custom_template`**（而不是工程内 `.local/export_templates`）：
+
+- `custom_template` 里写的路径必须真实存在；先前版本残留的 `res://../.local/export_templates/4.7.stable/windows_release_x86_64.exe` 指向一个不存在、且版本号也错的目录，是"导出失败"的直接原因。
+- 置空表示"用该版本的标准模板"，Godot 自己按 `%APPDATA%/Godot/export_templates/<version>/` 查找，没有路径漂移。
+- `.local/` 被 `.gitignore` 忽略，clone 到新机器后不可能自带模板，写在 `custom_template` 里只会得到一个含义不明的失败。
+
+**安装命令（可复现，脚本不联网）**：
 
 ```powershell
-pwsh -NoProfile -File .\tools\verify.ps1
-pwsh -NoProfile -File .\tools\build_windows.ps1
+py tools\build_windows.py --install-templates "D:\game\downloads\Godot_v4.7.2-stable_export_templates.tpz"
 ```
 
-可通过 `-GodotPath` 指定本机同版 Godot console 编辑器。preset固定使用项目内模板的 `res://../.local/export_templates/4.7.stable/windows_release_x86_64.exe`，避免依赖其他机器的绝对路径。脚本检查编辑器与模板版本、导出输出、实际运行、许可文件与SHA256，再生成ZIP。
+该命令先 `zipfile.testzip()` 校验整个包完整，再从 `templates/` 抽出 Windows x64 的 release/debug 两个模板，打印各自大小与 sha256，并强制校验模板 `--version`。模板包本身由 `D:\game\download.py`（断点续传，`py` 启动器）从官方发布资产下载；`build_windows.py` 从不下载任何东西（符合 AGENTS.md：不自动下载引擎/插件/资产）。
 
-正式输出：
+### 1.3 Python 与 PowerShell
+
+- 本机**没有 `python` 命令**，用 py 启动器：`C:\Users\hongxinyu\AppData\Local\Programs\Python\Launcher\py.exe`。
+- 本机**只有 Windows PowerShell 5.1，没有 PowerShell 7**，因此 `tools/build_windows.ps1`（`#Requires -Version 7.0` + `ProcessStartInfo.ArgumentList`）**在这台机器上无法执行**。构建入口改为 `tools/build_windows.py`，与 `tools/verify.py` 同样用 `py` 运行。`.ps1` 保留作历史记录，不作为构建入口。
+
+### 1.4 并发独占（否则会得到随机崩坏）
+
+同一个工程的 `.godot` 导入缓存**不能被并发访问**：多个 Godot 进程同时导入/导出会以 `3221225477`（`0xC0000005` 访问冲突）崩溃，或者产出缺失/半导入资源的包。
+
+```powershell
+Get-Process Godot*,StarAbyss* -ErrorAction SilentlyContinue   # 必须先为空
+```
+
+`tools/build_windows.py` 在开始前用 `tasklist` 检查，发现其它引擎进程就**拒绝构建**并列出 PID；`--wait-for-exclusive SECONDS` 可让它轮询等待窗口。测试/性能/截图等其它引擎任务请在此期间让路。
+
+### 1.5 环境变量：APPDATA 必须是真实的，缓存与临时目录必须重定向
+
+这台机器上**引擎进程只能写 `D:\game`（工作区）之内**的路径；写工作区外返回 `FileAccess` error 12。对照实验见 `.local/export-diagnostics/probe_write_scope.gd` 与 `probe_read_scope.gd`：写 `D:\game\...` 成功，写 `D:\`、`C:\Users\...\AppData\...`、`%TEMP%` 全部失败；**读**工作区外正常。
+
+于是构建必须区分处理：
+
+| 变量 | 构建时取值 | 理由 |
+| --- | --- | --- |
+| `APPDATA` | **保持真实**（`C:\Users\...\AppData\Roaming`） | 导出模板在 `%APPDATA%\Godot\export_templates\`，重定向它就找不到模板 |
+| `LOCALAPPDATA` | `D:\game\StarAbyss\.local\localappdata` | 只影响编辑器文档缓存；不重定向会恒产生 3 条 `Could not create editor cache directory` 假 ERROR |
+| `TEMP` / `TMP` | `D:\game\StarAbyss\.local\tmp` | 见下方"静默废包"缺陷 |
+
+> **静默废包缺陷（2026-10-23 实测，务必保留这条重定向）**
+> 导出器把 `project.binary` 先序列化到 `%TEMP%/tmpproject.binary` 再加进 PCK。当 TEMP 写不进去时：
+> - 导出**退出码仍是 0**，PCK 照样生成（3,156,204 字节），
+> - 但包内 `project.binary` 是 **0 字节**，包**无法启动**，
+> - 日志里只有 6 行 `ERROR: Couldn't save project.binary at '.../Temp/tmpproject.binary'` / `Can't open file from path` / `Cannot remove non-existent file or directory`。
+>
+> 因此构建脚本除了重定向 TEMP，还强制解析 PCK 尾部索引校验 `project.binary` 存在且非空（`assert_pck_is_launchable()`），把静默失败变成构建失败。
+
+与 `tools/verify.py` 的区别：测试运行器为了隔离会把 `APPDATA` 也重定向进 `.local/appdata`（它不需要模板），**构建脚本不能照抄**。
+
+## 2. 构建
+
+项目根目录（`D:\game\StarAbyss`）：
+
+```powershell
+py tools\build_windows.py                  # 完整：导出 → 包内夹具 → release 启动 → 清单 → SHA256 → ZIP
+py tools\build_windows.py --clean          # 先删本流水线的旧产物（只删自己那几个文件名，不递归删目录）
+py tools\build_windows.py --pack-only      # 只导出 PCK（诊断；不需要导出模板）
+py tools\build_windows.py --skip-smoke     # 跳过夹具与启动检查（产物标记为未验证）
+py tools\build_windows.py --no-zip         # 不打包 zip
+py tools\build_windows.py --out D:\tmp\b   # 换输出根目录
+py tools\build_windows.py --godot <path>   # 指定同版本引擎
+```
+
+失败即非零退出并打印 `FAIL: <阶段> ...` 摘要（含引擎输出尾部）。阶段：`editor-version` → `export` → `engine-notices` → `pck-functional-smoke` → `release-normal-start`。
+
+### 输出
 
 ```text
 builds/windows/star_abyss_windows_x64/
@@ -47,21 +115,68 @@ builds/windows/star_abyss_windows_x64.zip
 builds/windows/star_abyss_windows_x64.zip.sha256
 ```
 
-`export_presets.cfg`以release模式编译资源，排除`tests/*`和Blender/文档源；`.blend`源本来位于Godot工程外。开启Godot的shader_baker导出选项以请求Forward+预编译，但须检查实际产物和具体机器首帧表现，不能仅凭开关或导出成功宣称已消除编译卡顿。PCK保持独立，不嵌入EXE。模板与资源包同时保留在ZIP中，解压后双击EXE即可运行，须保持同名PCK相邻。此包未代码签名；构建不需要也不会读取证书或密码。引擎和第三方许可通知通过本机Godot的Engine接口生成。
+`BUILD_INFO.json` 记录引擎版本、模板路径与 sha256、exe/pck 的字节数与 sha256，以及四个**互相独立**的验证标志：`pck_functional_smoke_verified`、`release_normal_start_verified`、`release_native_input_verified`、`human_playtest_verified`。没有实际执行的检查保持 `false`。
 
-`-PackOnly`只生成PCK，用于数据打包诊断；独立极小工程已确认`--export-pack`不需要模板，不能据此宣称有正式Windows EXE。`-SkipSmoke`可跳过图形检查，但会在BUILD_INFO.json中分别标记PCK功能与release常规启动未经验证，这种输出仍待验证。
+`export_presets.cfg` 以 release 模式编译资源，`exclude_filter="tests/*,*.md,*.blend,*.blend1,*.blend2"`；PCK 独立不嵌入 EXE（`binary_format/embed_pck=false`），解压后必须保持同名 PCK 与 EXE 相邻。包未做代码签名，构建不读取证书或密码。引擎与第三方许可由本机 Godot 的 `Engine.get_license_text()` / `get_copyright_info()` 生成，不手写。
 
-## 包验收
+## 3. 包验收（两层，不能互相替代）
 
-官方4.7 release模板实测以`disable_path_overrides=yes`编译：拒绝`--main-pack`、不支持外部`--script`。因此默认构建明确分两层验证，不能把它们等同：
+官方 4.7 release 模板以 `disable_path_overrides=yes` 编译：拒绝 `--main-pack`、不支持外部 `--script`。所以分两层：
 
-1. 用同版本编辑器的游戏运行模式（不加`--editor`、不加源码`--path`），从输出目录以`--main-pack`加载最终PCK，加外部`godot/tests/export_smoke_test.gd`。检查包内无测试源码、实际点击开始、资源/骨骼/武器加载、移动与技能输入、Esc暂停、重开及返回菜单，并保存图形帧。该检查验证最终包内数据，运行二进制仍为编辑器构建。
-2. 从输出目录直接启动真正release EXE，让其自动加载相邻同名PCK，不注入外部脚本，运行普通主菜单120帧并检查退出/日志。这验证真实release的常规启动，不能单独证明其全部输入与闭环。真实EXE的原生输入或人工试玩须另有实际记录，不能从PCK脚本检查推定。
+1. **包内数据功能夹具**：用**同版本编辑器的游戏运行模式**（不加 `--editor`、不加源码 `--path`），从输出目录以 `--main-pack` 加载最终 PCK，外加外部 `godot/tests/export_smoke_test.gd`。检查包内无测试源码、真实点击开始、资源/骨骼/武器加载、移动与技能输入、Esc 暂停、重开、返回菜单，并保存图形帧。它验证的是**最终 PCK 的数据**，运行的二进制仍是编辑器构建。
+   成功标志：`EXPORT SMOKE RESULT: <N> checks, 0 failures`。
+2. **真实 release 二进制普通启动**：从输出目录直接启动 `StarAbyss.exe`（自动加载相邻同名 PCK），不注入外部脚本，`--quit-after 120`，检查退出码 0、日志无 SCRIPT ERROR，且启动输出含 `Vulkan ... Forward+`（脚本会把渲染器行打印出来；缺失即构建失败）。
 
-测试脚本不放入PCK。BUILD_INFO.json分别记录`pck_functional_smoke_verified`、`release_normal_start_verified`、`release_native_input_verified`和`human_playtest_verified`，不将尚未执行的检查标为完成。
+真实 EXE 的原生键鼠输入与人工试玩**不能**从上面的脚本检查推定，需另有实际记录，见 `docs/TESTING.md`。
 
-每个过程均检查退出码、stdout/stderr和错误/警告行；60秒超时只终止本次测试进程。日志与截图在`.local/export-diagnostics/`。自动脚本检查不能替代人工试玩；实体键鼠三局、音效听感、主观美术和不同机器兼容性分别保留验收状态，见TESTING.md。性能测量另见主阶段报告，不以固定FPS脚本或打包成功充当性能达标证据。
+对已产出的 PCK 单独跑夹具（QA 用）：
 
-构建阶段只创建/覆盖本项目固定输出文件，不递归删除目录。若输出目录出现预期之外的文件，脚本会停止供检查，避免把用户文件误装进ZIP。
+```powershell
+py tools\verify.py --packed "D:\game\StarAbyss\builds\windows\star_abyss_windows_x64\StarAbyss.pck" --only export-smoke
+```
 
-2026-10-22正式游戏构建已执行：编辑器与release模板版本匹配，PCK功能脚本15项通过，真正release普通启动120帧退出0，相关导出/功能/启动日志无错误或警告。最终ZIP和每项文件SHA256均由脚本产生；原生release输入与人工试玩状态仍以BUILD_INFO.json及TESTING.md中的实际记录为准。
+也可以手工等价执行：
+
+```powershell
+& 'D:\game\apps\godot\Godot_v4.7.2-stable_win64_console.exe' --main-pack 'builds\windows\star_abyss_windows_x64\StarAbyss.pck' --fixed-fps 60 --max-fps 0 --disable-vsync --audio-driver Dummy --script 'godot\tests\export_smoke_test.gd'
+```
+
+`tools/inspect_pck.py` 可离线核对包内容（不需要启动引擎）：
+
+```powershell
+py tools\inspect_pck.py builds\windows\star_abyss_windows_x64\StarAbyss.pck project.binary main_menu.tscn
+```
+
+它解析 PCK 自己的索引（Godot 4.7 为 `pack_version=4`、`flags=2` 相对路径、索引位于文件末尾、头部偏移 32 处是 directory offset），输出文件数、payload、指定文件是否在包内及大小。注意导出后场景是二进制：包内是 `main_menu.scn` 加 `main_menu.tscn.remap`，**没有** `main_menu.tscn` 实体文件，加载路径仍写作 `.tscn`。
+
+## 4. 日志、错误过滤与无害行
+
+各阶段输出落在 `.local/export-diagnostics/`：`<stage>.output.txt`（stdout+stderr）与 `<stage>.log`（引擎 `--log-file`）。任一阶段出现 `SCRIPT ERROR:` / `SHADER ERROR:` / `ERROR:` / `FAIL:` / `WARNING:` 即失败，只有下列环境噪声被显式豁免（每条都是"引擎写不了自己的用户目录"或"读不到系统证书库"，与游戏、与导出产物无关）：
+
+```text
+Failed to read the root certificate store
+Error saving editor settings to
+Cannot save file '...AppData...editor_settings...'
+Cannot create file '...AppData...editor_doc_cache...'
+Cannot save editor help cache
+Cannot create editor (data|config|cache) directory
+Could not create directory: '...AppData...'
+Could not open 'user://' directory
+Could not create directory: 'user://...'
+Failed to open log file for writing: user://...
+Can't save resource to empty path
+```
+
+豁免是**窄正则**，只可能匹配编辑器用户目录噪声；不会掩盖 `export`、`savepack`、资源缺失或脚本错误。
+
+## 5. 中间 PCK 的地位（不要说成发布证据）
+
+`--pack-only` 产出的 PCK **仅用于提前发现打包缺陷**（缺资源、`project.binary` 为空、测试源码混入包内等），**不作为发布证据**：它不带 EXE、不含最终音频/VFX 内容，也不能证明 release 模板行为。发布必须来自第 2 节的完整构建。
+
+## 6. 历史记录（已被本文档取代）
+
+上一阶段（另一台机器、引擎 `4.7.stable.official.5b4e0cb0f`）曾用 `E:\share\Godot_v4.7` 与工程内 `.local/export_templates/4.7.stable/` 完成过预检导出，模板 sha256 `c42eb5d1...`，模板包 sha256 `9714459d...`。那些路径与本机无关，**版本号也不匹配当前 4.7.2 引擎**，仅作历史记录保留；当前构建一律按第 1 节执行。
+
+## 7. 实测记录
+
+见本文档末节"2026-10-23 实测"（构建完成后追加）。

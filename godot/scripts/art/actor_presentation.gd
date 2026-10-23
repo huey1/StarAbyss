@@ -7,6 +7,10 @@ extends Node3D
 @export var weapon_bone: StringName = &"WeaponSocket"
 @export var weapon_rotation_degrees: Vector3 = Vector3.ZERO
 @export var actor_path: NodePath = NodePath("../..")
+## P7: drive the cel shader's per-instance charge-up glow from the enemy windup clock.
+@export var threat_pulse_enabled: bool = true
+## Flicker cycles the warning glow goes through across one windup.
+@export var threat_flicker_cycles: float = 4.0
 
 var model: Node3D
 var skeleton: Skeleton3D
@@ -20,6 +24,8 @@ var _health: HealthComponent
 var _feedback: CombatFeedback
 var _player: PlayerController
 var _enemy: SentinelController
+var _threat_meshes: Array[MeshInstance3D] = []
+var _threat_value: float = -1.0
 
 
 func _ready() -> void:
@@ -55,6 +61,7 @@ func _ready() -> void:
 	weapon.basis = rest_basis.inverse() * Basis.from_euler(offset)
 	weapon_attachment.add_child(weapon)
 	ToonPalette.apply_to(model)
+	_cache_threat_meshes()
 	_health.died.connect(_on_died)
 	_sample(&"Idle", 0.0, true)
 
@@ -102,6 +109,7 @@ func _sample_player(delta: float) -> void:
 
 func _sample_enemy(delta: float) -> void:
 	var brain: EnemyBrain = _enemy.brain
+	_update_threat(brain)
 	if brain.current_state in [EnemyBrain.State.TELEGRAPH, EnemyBrain.State.ATTACK, EnemyBrain.State.RECOVER]:
 		var clip: StringName = &"Attack"
 		if brain is GuardianBrain:

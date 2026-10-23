@@ -20,7 +20,7 @@ Behaviour matches build_windows.ps1 stage-for-stage:
 
 Additions over the original:
   * `--install-templates TPZ` extracts the matching official template out of the
-    official .tpz archive, so a clean machine needs one command (see below);
+    official .tpz archive, so a clean machine needs one command;
   * `--clean` removes only this pipeline's own outputs, never a directory tree.
 
 Usage:
@@ -42,48 +42,120 @@ import subprocess
 import sys
 import time
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 
 DEFAULT_GODOT = r"D:\game\apps\godot\Godot_v4.7.2-stable_win64_console.exe"
+# Hard build precondition: the editor and the export templates must both report this
+# exact version, otherwise the engine refuses (or silently mis-packs) the export.
+EXPECTED_ENGINE_VERSION = "4.7.2.stable.official.ed1daf0bf"
 EXPECTED_ENGINE_PREFIX = "4.7.2.stable"
-# Directory name Godot uses for template lookups: <version-without-hash>.
+# Directory name Godot uses for template lookups: the version without its build hash.
 TEMPLATE_VERSION_DIR = "4.7.2.stable"
 PRESET_NAME = "Windows Desktop"
 PACKAGE_NAME = "star_abyss_windows_x64"
 EXE_NAME = "StarAbyss.exe"
 PCK_NAME = "StarAbyss.pck"
+ALLOWED_PACKAGE_FILES = (
+    "StarAbyss.exe", "StarAbyss.pck", "试玩说明.txt", "GODOT_LICENSE.txt",
+    "THIRD_PARTY_NOTICES.json", "BUILD_INFO.json", "SHA256SUMS.txt",
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 GAME_PATH = PROJECT_ROOT / "godot"
-TEMPLATE_DIR = PROJECT_ROOT / ".local" / "export_templates" / TEMPLATE_VERSION_DIR
-TEMPLATE_EXE = TEMPLATE_DIR / "windows_release_x86_64.exe"
-# Standard Godot template location, used only if the preset does not pin a custom template.
-APPDATA_PATH = PROJECT_ROOT / ".local" / "appdata"
-STANDARD_TEMPLATE_EXE = APPDATA_PATH / "Godot" / "export_templates" / TEMPLATE_VERSION_DIR / "windows_release_x86_64.exe"
-BUILD_ROOT = PROJECT_ROOT / "builds" / "windows"
-PACKAGE_PATH = BUILD_ROOT / PACKAGE_NAME
+DEFAULT_BUILD_ROOT = PROJECT_ROOT / "builds" / "windows"
 DIAGNOSTICS_PATH = PROJECT_ROOT / ".local" / "export-diagnostics"
-ZIP_PATH = BUILD_ROOT / f"{PACKAGE_NAME}.zip"
+# In-project template copy, pinned explicitly by export_presets.cfg:
+#   custom_template/{debug,release} = "res://../.local/export_templates/<ver>/windows_*.exe"
+TEMPLATE_DIR = PROJECT_ROOT / ".local" / "export_templates" / TEMPLATE_VERSION_DIR
 
-EXE_PATH = PACKAGE_PATH / EXE_NAME
-PCK_PATH = PACKAGE_PATH / PCK_NAME
 
-# Engine lines caused by this sandbox / redirected APPDATA, not by the game.
-IGNORED_ERROR_LINES = (
-    "Failed to read the root certificate store",
-    "Error saving editor settings to",
-    "Can't save resource to empty path",
-    # Software renderer / dummy audio driver notices on machines without a GPU context.
-    "Your video card driver does not support any of the supported Vulkan",
-    "Unable to initialize Vulkan",
+def template_dir() -> Path:
+    """Templates live INSIDE the workspace: this environment forbids the engine from
+    writing the real %APPDATA%/Godot (it can fail even reads there), so the project
+    keeps its own copy and the preset pins it explicitly."""
+    return TEMPLATE_DIR
+
+
+def template_exe(kind: str = "release") -> Path:
+    return template_dir() / f"windows_{kind}_x86_64.exe"
+
+
+# Invariant of this build: NOTHING may be written outside the workspace (D:\game).
+# The engine is sandboxed to that tree, so every user directory it would normally use
+# is redirected into .local/. APPDATA also decides where export templates are looked
+# up, which is why the preset pins an explicit in-project template path instead of
+# relying on the standard %APPDATA%/Godot/export_templates directory.
+LOCAL_APPDATA_PATH = PROJECT_ROOT / ".local" / "localappdata"
+APPDATA_PATH = PROJECT_ROOT / ".local" / "appdata"
+# The exporter serialises project.binary through the OS temp directory before adding it
+# to the PCK. When that write fails the export still exits 0 but the pack ships an EMPTY
+# project.binary and cannot start, so TEMP/TMP must be writable too.
+TEMP_PATH = PROJECT_ROOT / ".local" / "temp"
+ENGINE_ENV_OVERRIDES = {
+    "APPDATA": str(APPDATA_PATH),
+    "LOCALAPPDATA": str(LOCAL_APPDATA_PATH),
+    "TEMP": str(TEMP_PATH),
+    "TMP": str(TEMP_PATH),
+}
+
+
+# Engine lines caused by this environment, never by the game or the export itself:
+#   * the Windows certificate store is not readable here;
+#   * the engine is not allowed to write its own editor settings/cache/help cache or
+#     user:// logs outside the project in this sandbox, so the editor reports that it
+#     could not save them (proved with .local/export-diagnostics/probe_*; reads of the
+#     real %APPDATA%/Godot -- where export templates live -- work fine);
+#   * "can't save resource to empty path" is the same editor-settings save path.
+# Each pattern is deliberately narrow: it can only match editor user-directory noise,
+# never an export-output or gameplay failure.
+IGNORED_ERROR_PATTERNS = (
+    r"Failed to read the root certificate store",
+    r"Error saving editor settings to",
+    r"Cannot save file '[^']*[\\/]AppData[\\/][^']*editor_settings",
+    r"Cannot create file '[^']*[\\/]AppData[\\/][^']*editor_doc_cache",
+    r"Cannot save editor help cache",
+    r"Cannot create editor (data|config|cache) directory",
+    r"Could not create directory: '[^']*[\\/]AppData[\\/]",
+    r"Could not open 'user://' directory",
+    r"Could not create directory: 'user://",
+    r"Failed to open log file for writing: user://",
+    r"Can't save resource to empty path",
 )
+IGNORED_ERRORS = tuple(re.compile(pattern) for pattern in IGNORED_ERROR_PATTERNS)
 
 ERROR_PATTERN = re.compile(r"(?im)^\s*(SCRIPT ERROR:|SHADER ERROR:|ERROR:|FAIL:|WARNING:)")
 SMOKE_MARKER = re.compile(r"EXPORT SMOKE RESULT: (\d+) checks, (\d+) failures")
+AUDIT_MARKER = re.compile(r"PACK AUDIT RESULT: (\d+) checks, (\d+) failures")
 
 
 class BuildError(RuntimeError):
     """A stage failed; the message is the summary printed before a non-zero exit."""
+
+
+@dataclass(frozen=True)
+class Paths:
+    """Output locations for one build run."""
+
+    build_root: Path
+    package_path: Path
+    exe: Path
+    pck: Path
+    zip: Path
+
+    @property
+    def zip_hash(self) -> Path:
+        return Path(str(self.zip) + ".sha256")
+
+    @classmethod
+    def from_root(cls, root: Path) -> "Paths":
+        package = root / PACKAGE_NAME
+        return cls(build_root=root, package_path=package,
+                   exe=package / EXE_NAME, pck=package / PCK_NAME,
+                   zip=root / f"{PACKAGE_NAME}.zip")
+
+
+DEFAULT_PATHS = Paths.from_root(DEFAULT_BUILD_ROOT)
 
 
 def log(message: str) -> None:
@@ -105,10 +177,54 @@ def genuine_error_lines(text: str) -> list[str]:
         if not ERROR_PATTERN.match(line):
             continue
         stripped = line.strip()
-        if any(ignored in stripped for ignored in IGNORED_ERROR_LINES):
+        if any(ignored.search(stripped) for ignored in IGNORED_ERRORS):
             continue
         problems.append(stripped)
     return problems
+
+
+def running_engine_processes() -> list[str]:
+    """Return descriptions of other running engine processes (empty when exclusive)."""
+    if os.name != "nt":
+        return []
+    try:
+        listing = subprocess.run(["tasklist", "/FO", "CSV", "/NH"], capture_output=True,
+                                 text=True, encoding="utf-8", errors="replace",
+                                 timeout=60).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        log(f"  note: could not list processes to check exclusivity ({exc})")
+        return []
+    busy: list[str] = []
+    for line in listing.splitlines():
+        fields = [field.strip('" ') for field in line.split('","')]
+        if not fields or not fields[0]:
+            continue
+        name = fields[0].strip('"')
+        if name.lower().startswith("godot") or name.lower().startswith("starabyss"):
+            pid = fields[1] if len(fields) > 1 else "?"
+            busy.append(f"{name} (pid {pid})")
+    return busy
+
+
+def assert_exclusive_project_access(wait_seconds: int = 0) -> None:
+    """Refuse to build while another engine process holds the project.
+
+    Concurrent access to the same project's `.godot` cache makes `--editor --import`
+    crash with 3221225477 (0xC0000005 access violation); the export can then produce a
+    pack with missing or half-imported resources.
+    """
+    deadline = time.time() + max(0, wait_seconds)
+    busy = running_engine_processes()
+    while busy and time.time() < deadline:
+        log(f"  waiting for exclusive project access ({len(busy)} engine process(es) running)...")
+        time.sleep(5)
+        busy = running_engine_processes()
+    if busy:
+        raise BuildError(
+            "Another engine process is using this project; a concurrent export can corrupt "
+            "the .godot import cache (observed crash 0xC0000005). Waiting is supported with "
+            "--wait-for-exclusive SECONDS. Running:\n  " + "\n  ".join(busy))
+    log("Preflight: exclusive project access (no other engine process running)")
 
 
 def run_stage(name: str, executable: Path, arguments: list[str],
@@ -116,10 +232,15 @@ def run_stage(name: str, executable: Path, arguments: list[str],
               timeout: int = 120) -> str:
     """Run one engine stage; return combined stdout+stderr, raise BuildError on failure."""
     command = [str(executable), *arguments]
-    log_path = DIAGNOSTICS_PATH / f"{name}.log"
-    log_file = DIAGNOSTICS_PATH / f"{name}.output.txt"
+    engine_log_path = DIAGNOSTICS_PATH / f"{name}.log"
+    # Every engine run gets user directories redirected into the project: this
+    # environment forbids writes outside the workspace (proved by
+    # .local/export-diagnostics/probe_write_scope.gd), and a real %TEMP% would silently
+    # produce a PCK with an empty project.binary.
     env = dict(os.environ)
-    env["APPDATA"] = str(APPDATA_PATH)
+    env.update(ENGINE_ENV_OVERRIDES)
+    for override in (APPDATA_PATH, LOCAL_APPDATA_PATH, TEMP_PATH):
+        override.mkdir(parents=True, exist_ok=True)
 
     started = time.time()
     try:
@@ -138,14 +259,13 @@ def run_stage(name: str, executable: Path, arguments: list[str],
         code = -1
         timed_out = True
 
-    log_file.write_text(output, encoding="utf-8")
+    (DIAGNOSTICS_PATH / f"{name}.output.txt").write_text(output, encoding="utf-8")
     engine_log = ""
-    if log_path.exists():
-        engine_log = log_path.read_text(encoding="utf-8", errors="replace")
+    if engine_log_path.exists():
+        engine_log = engine_log_path.read_text(encoding="utf-8", errors="replace")
 
     problems = genuine_error_lines(output) + genuine_error_lines(engine_log)
-    elapsed = time.time() - started
-    log(f"  [{name}] exit {code}, {elapsed:.1f}s")
+    log(f"  [{name}] exit {code}, {time.time() - started:.1f}s")
     if timed_out:
         raise BuildError(f"{name} timed out after {timeout}s\n{output[-4000:]}")
     if code != 0:
@@ -158,21 +278,69 @@ def run_stage(name: str, executable: Path, arguments: list[str],
 
 def engine_version(godot: Path) -> str:
     output = run_stage("editor-version", godot, ["--version"], PROJECT_ROOT, 60)
-    version = output.strip().splitlines()[-1].strip() if output.strip() else ""
-    return version
+    lines = [line.strip() for line in output.strip().splitlines() if line.strip()]
+    if not lines:
+        raise BuildError("Could not read the editor version from `--version` output.")
+    return lines[-1]
+
+
+def template_version_of(template: Path) -> str:
+    """Ask the template binary for its engine version."""
+    output = run_stage("template-version", template, ["--version"], PROJECT_ROOT, 60)
+    lines = [line.strip() for line in output.strip().splitlines() if line.strip()]
+    if not lines:
+        raise BuildError(f"Could not read the template version from {template}")
+    return lines[-1]
+
+
+def check_preset_pin(require_files: bool = True) -> None:
+    """The preset must pin the in-project template paths explicitly.
+
+    This environment forbids the engine from using the standard
+    %APPDATA%/Godot/export_templates directory, so an empty pin would make a real
+    release export fail. `require_files=False` (pack-only diagnostics) only warns,
+    because --export-pack does not use export templates at all.
+    """
+    preset = GAME_PATH / "export_presets.cfg"
+    if not preset.is_file():
+        raise BuildError(f"Missing export preset file: {preset}")
+    text = preset.read_text(encoding="utf-8", errors="replace")
+    if f'name="{PRESET_NAME}"' not in text:
+        raise BuildError(f'export_presets.cfg has no preset named "{PRESET_NAME}"')
+    for key in ("custom_template/debug", "custom_template/release"):
+        match = re.search(rf'^{re.escape(key)}\s*=\s*"(.*)"\s*$', text, re.MULTILINE)
+        value = (match.group(1) if match else "").strip()
+        if not value:
+            message = (f'Preset {key} is empty. Pin the in-project template explicitly, e.g.\n'
+                       f'  {key}="res://../.local/export_templates/{TEMPLATE_VERSION_DIR}/'
+                       f'windows_{"debug" if "debug" in key else "release"}_x86_64.exe"')
+            if require_files:
+                raise BuildError(message)
+            log(f"  note: {key} is empty (allowed for --pack-only)")
+            continue
+        resolved = GAME_PATH / Path(value.replace("res://", "", 1))
+        if not resolved.is_absolute():
+            resolved = (GAME_PATH / resolved).resolve()
+        if not resolved.is_file():
+            message = (f"Preset {key} pins a template that does not exist: {value}\n"
+                       f"  resolved to: {resolved}\n"
+                       "Install the templates with --install-templates first.")
+            if require_files:
+                raise BuildError(message)
+            log(f"  note: {key} -> {resolved} (missing; allowed for --pack-only)")
+            continue
+        log(f"Preset {key}: {value} (exists)")
 
 
 def resolve_template() -> Path:
-    """Return the release template the preset will actually use, or raise."""
-    if TEMPLATE_EXE.is_file():
-        return TEMPLATE_EXE
-    if STANDARD_TEMPLATE_EXE.is_file():
-        return STANDARD_TEMPLATE_EXE
+    """Return the release template this machine will use, or raise BuildError."""
+    candidate = template_exe()
+    if candidate.is_file():
+        return candidate
     raise BuildError(
-        "Missing Godot 4.7.2 release export template. Expected one of:\n"
-        f"  {TEMPLATE_EXE}\n"
-        f"  {STANDARD_TEMPLATE_EXE}\n"
-        "Install it with (no download is performed by this script):\n"
+        "Missing Godot 4.7.2 release export template. Expected:\n"
+        f"  {candidate}\n"
+        "Install it with (this script never downloads anything):\n"
         "  py tools/build_windows.py --install-templates <Godot_v4.7.2-stable_export_templates.tpz>\n"
         "See docs/BUILD_WINDOWS.md."
     )
@@ -188,55 +356,113 @@ def install_templates(archive: Path, force: bool = False) -> None:
         raise BuildError(f"Export-template archive looks truncated: {archive} is {size} bytes")
     log(f"Installing export templates from {archive} ({size:,} bytes)")
     log(f"  archive sha256: {sha256_of(archive)}")
+    target_exe = template_exe("release")
     try:
         with zipfile.ZipFile(archive) as bundle:
-            bad = bundle.testzip()
-            if bad:
-                raise BuildError(f"Export-template archive is corrupt at member {bad}")
-            wanted = [name for name in bundle.namelist()
-                      if name.startswith("templates/") and name.endswith("windows_release_x86_64.exe")]
-            if not wanted:
-                raise BuildError("Archive contains no templates/windows_release_x86_64.exe")
-            member = wanted[0]
-            TEMPLATE_DIR.mkdir(parents=True, exist_ok=True)
-            if TEMPLATE_EXE.exists() and not force:
-                log(f"  template already installed: {TEMPLATE_EXE}")
-            else:
-                with bundle.open(member) as source, TEMPLATE_EXE.open("wb") as target:
-                    shutil.copyfileobj(source, target, 1 << 20)
-                log(f"  extracted {member} -> {TEMPLATE_EXE}")
+            bad_member = bundle.testzip()
+            if bad_member:
+                raise BuildError(f"Export-template archive is corrupt at member {bad_member}")
+            available = [name for name in bundle.namelist() if name.startswith("templates/")]
+            log(f"  archive top-level entries: {len(available)} in templates/")
+            # Godot validates debug *and* release templates for this preset even on a
+            # release-only export, so both Windows x64 binaries are installed.
+            for kind in ("release", "debug"):
+                suffix = f"windows_{kind}_x86_64.exe"
+                wanted = [name for name in available if name.endswith(suffix)]
+                if not wanted:
+                    raise BuildError(f"Archive contains no templates/{suffix}")
+                member = wanted[0]
+                destination = template_exe(kind)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if destination.exists() and not force:
+                    log(f"  already installed: {destination}")
+                else:
+                    with bundle.open(member) as source, destination.open("wb") as target:
+                        shutil.copyfileobj(source, target, 1 << 20)
+                    log(f"  extracted {member} -> {destination}")
+                log(f"  {suffix}: {destination.stat().st_size:,} bytes  "
+                    f"sha256 {sha256_of(destination)}")
     except zipfile.BadZipFile as exc:
         raise BuildError(f"Export-template archive is not a readable zip: {exc}") from exc
-    size = TEMPLATE_EXE.stat().st_size
-    log(f"  template size: {size:,} bytes")
-    log(f"  template sha256: {sha256_of(TEMPLATE_EXE)}")
-    # Also mirror into the redirected APPDATA so a preset without a custom template works.
+
+    # Hard requirement: the template must be the exact build this editor expects.
+    version = template_version_of(template_exe("release"))
+    log(f"  template version: {version}")
+    if version != EXPECTED_ENGINE_VERSION:
+        raise BuildError(
+            f"Template version {version} does not match the required engine build "
+            f"{EXPECTED_ENGINE_VERSION}.")
+    log("PASS: template installed into Godot's standard template directory")
+
+
+def run_pack_audit(godot: Path, paths: Paths) -> int:
+    """Second gate: audited content of the finished pack by tools/pack_audit.gd.
+
+    Asserts every shipped audio cue exists and decodes, every scene and GLB is present,
+    no development test leaked in, and `application/run/main_scene` survived the export.
+    """
+    audit_script = PROJECT_ROOT / "tools" / "pack_audit.gd"
+    if not audit_script.is_file():
+        raise BuildError(f"Missing pack audit script: {audit_script}")
+    output = run_stage(
+        "pack-audit", godot,
+        ["--headless", "--main-pack", str(paths.pck), "--script", str(audit_script),
+         "--audio-driver", "Dummy",
+         "--log-file", str(DIAGNOSTICS_PATH / "pack-audit.log")],
+        paths.package_path, 600,
+    )
+    match = AUDIT_MARKER.search(output)
+    if not match:
+        raise BuildError("Pack audit did not produce its result marker.")
+    checks, failures = int(match.group(1)), int(match.group(2))
+    if failures:
+        raise BuildError(f"Pack audit reported {failures} failure(s) of {checks} checks.")
+    log(f"PASS: pack audit {checks} checks, 0 failures "
+        "(assets, scenes, models, no test leakage, main scene intact)")
+    return checks
+
+
+def assert_pck_is_launchable(pck: Path) -> int:
+    """A launchable Godot pack must contain a non-empty project.binary entry.
+
+    The exporter writes project.binary through the OS temp directory; when that write
+    fails the PCK is still produced (exit code 0) but the entry is 0 bytes and the pack
+    cannot start. This check turns that silent failure into a build failure.
+    """
+    import inspect_pck  # sibling module in tools/
+
     try:
-        STANDARD_TEMPLATE_EXE.parent.mkdir(parents=True, exist_ok=True)
-        if not STANDARD_TEMPLATE_EXE.exists() or force:
-            shutil.copy2(TEMPLATE_EXE, STANDARD_TEMPLATE_EXE)
-            log(f"  mirrored to standard location: {STANDARD_TEMPLATE_EXE}")
-    except OSError as exc:  # mirror is a convenience, not a requirement
-        log(f"  note: could not mirror template into redirected APPDATA ({exc})")
+        entries, info = inspect_pck.read_index(pck)
+    except SystemExit as exc:
+        raise BuildError(f"PCK index is unreadable: {exc}") from exc
+    sizes = {path.removeprefix("res://"): size for path, _offset, size in entries}
+    if "project.binary" not in sizes:
+        raise BuildError("PCK has no project.binary entry; the pack cannot launch.")
+    if sizes["project.binary"] == 0:
+        raise BuildError(
+            "PCK contains an EMPTY project.binary (0 bytes): the exporter could not write "
+            "its temporary file (see the %TEMP% redirection in run_stage). "
+            "The pack is not launchable.")
+    log(f"  PCK index: {len(entries)} files, index at {info['directory_offset']:,}, "
+        f"project.binary {sizes['project.binary']:,} bytes")
+    return len(entries)
 
 
-def clean_outputs() -> None:
+def clean_outputs(paths: Paths) -> None:
     """Remove only files this pipeline owns; never delete a directory tree."""
-    owned = [EXE_PATH, PCK_PATH, ZIP_PATH, ZipHash(ZIP_PATH),
-             PACKAGE_PATH / "试玩说明.txt", PACKAGE_PATH / "GODOT_LICENSE.txt",
-             PACKAGE_PATH / "THIRD_PARTY_NOTICES.json", PACKAGE_PATH / "BUILD_INFO.json",
-             PACKAGE_PATH / "SHA256SUMS.txt"]
+    owned = [paths.exe, paths.pck, paths.zip, paths.zip_hash,
+             paths.package_path / "试玩说明.txt",
+             paths.package_path / "GODOT_LICENSE.txt",
+             paths.package_path / "THIRD_PARTY_NOTICES.json",
+             paths.package_path / "BUILD_INFO.json",
+             paths.package_path / "SHA256SUMS.txt"]
     for path in owned:
         if path.is_file():
             path.unlink()
             log(f"  removed {path}")
 
 
-def ZipHash(path: Path) -> Path:
-    return Path(str(path) + ".sha256")
-
-
-def write_engine_notices(godot: Path) -> None:
+def write_engine_notices(godot: Path, paths: Paths) -> None:
     """Read licence notices from the engine itself instead of hard-coding them."""
     script = DIAGNOSTICS_PATH / "write_engine_notices.gd"
     script.write_text(
@@ -263,7 +489,8 @@ func _initialize() -> void:
         encoding="utf-8",
     )
     run_stage("engine-notices", godot,
-              ["--headless", "--path", str(GAME_PATH), "--script", str(script), "--", str(PACKAGE_PATH)],
+              ["--headless", "--path", str(GAME_PATH), "--script", str(script),
+               "--", str(paths.package_path)],
               GAME_PATH, 120)
 
 
@@ -284,40 +511,78 @@ SHA256SUMS.txt 可用于核对解压后的文件完整性。
 """
 
 
-def verify_package_contents() -> None:
-    allowed = {"StarAbyss.exe", "StarAbyss.pck", "试玩说明.txt", "GODOT_LICENSE.txt",
-               "THIRD_PARTY_NOTICES.json", "BUILD_INFO.json", "SHA256SUMS.txt"}
-    unexpected = [str(path.relative_to(PACKAGE_PATH)) for path in PACKAGE_PATH.rglob("*")
-                  if path.is_file() and path.name not in allowed]
+def verify_package_contents(paths: Paths) -> None:
+    unexpected = [path.name for path in paths.package_path.iterdir()
+                  if path.is_file() and path.name not in ALLOWED_PACKAGE_FILES]
     if unexpected:
         raise BuildError(
             "Unexpected files in package directory; inspect without deleting user files: "
             + ", ".join(sorted(unexpected)))
 
 
+def run_smoke(godot: Path, paths: Paths) -> int:
+    """Validate the final PCK and the real release binary; return verified check count."""
+    # Official release templates disable --main-pack / --script overrides, so the
+    # final data pack is validated with the identical-version editor runtime, and
+    # the real release binary is launched separately for a normal-start check.
+    smoke_script = GAME_PATH / "tests" / "export_smoke_test.gd"
+    screenshot = DIAGNOSTICS_PATH / "package_gameplay.png"
+    output = run_stage(
+        "pck-functional-smoke", godot,
+        ["--main-pack", str(paths.pck), "--fixed-fps", "60", "--max-fps", "0",
+         "--disable-vsync", "--audio-driver", "Dummy", "--script", str(smoke_script),
+         "--log-file", str(DIAGNOSTICS_PATH / "pck-functional-smoke.log"),
+         "--", str(screenshot)],
+        paths.package_path, 600,
+    )
+    match = SMOKE_MARKER.search(output)
+    if not match:
+        raise BuildError("Release smoke did not produce its success marker.")
+    checks, failures = int(match.group(1)), int(match.group(2))
+    if failures:
+        raise BuildError(f"Release smoke reported {failures} failure(s) of {checks} checks.")
+    log(f"PASS: final PCK functional smoke under same-version editor runtime "
+        f"({checks} checks, 0 failures)")
+
+    start_output = run_stage(
+        "release-normal-start", paths.exe,
+        ["--fixed-fps", "60", "--audio-driver", "Dummy", "--quit-after", "120",
+         "--log-file", str(DIAGNOSTICS_PATH / "release-normal-start.log")],
+        paths.package_path, 180,
+    )
+    highlights = [line.strip() for line in start_output.splitlines()
+                  if re.search(r"(?i)Vulkan|Forward\+|OpenGL|Godot Engine v|Using Device", line)]
+    for line in highlights:
+        log(f"    {line}")
+    if "Forward+" not in start_output:
+        raise BuildError(
+            "Release EXE did not report a Forward+ renderer in its startup output. "
+            "The build must not be shipped as a verified Forward+ build.")
+    log("PASS: real release EXE normal startup (separate from PCK functional smoke)")
+    return checks
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Star Abyss Windows x64 release build")
     parser.add_argument("--godot", default=os.environ.get("STARABYSS_GODOT", DEFAULT_GODOT),
                         help="Path to the Godot 4.7.2 console editor binary")
-    parser.add_argument("--out", default=str(BUILD_ROOT), help="Build output root")
+    parser.add_argument("--out", default=str(DEFAULT_PATHS.build_root),
+                        help="Build output root (default: builds/windows)")
     parser.add_argument("--install-templates", default="", metavar="TPZ",
                         help="Extract the release template from an official .tpz archive and exit")
     parser.add_argument("--force-templates", action="store_true",
                         help="Re-extract the template even if one is already installed")
-    parser.add_argument("--clean", action="store_true", help="Remove previous outputs of this pipeline")
+    parser.add_argument("--clean", action="store_true",
+                        help="Remove previous outputs of this pipeline before building")
     parser.add_argument("--pack-only", action="store_true", help="Export only the PCK (diagnostic)")
-    parser.add_argument("--skip-smoke", action="store_true", help="Skip gameplay/startup smoke checks")
+    parser.add_argument("--skip-smoke", action="store_true",
+                        help="Skip gameplay/startup smoke checks (the build stays unverified)")
     parser.add_argument("--no-zip", action="store_true", help="Do not produce the distributable zip")
+    parser.add_argument("--wait-for-exclusive", type=int, default=0, metavar="SECONDS",
+                        help="Wait up to SECONDS for other engine processes to exit")
     args = parser.parse_args()
 
-    global BUILD_ROOT, PACKAGE_PATH, ZIP_PATH
-    BUILD_ROOT = Path(args.out).resolve()
-    PACKAGE_PATH = BUILD_ROOT / PACKAGE_NAME
-    ZIP_PATH = BUILD_ROOT / f"{PACKAGE_NAME}.zip"
-    globals().update(
-        EXE_PATH=PACKAGE_PATH / EXE_NAME,
-        PCK_PATH=PACKAGE_PATH / PCK_NAME,
-    )
+    paths = Paths.from_root(Path(args.out).resolve())
 
     godot = Path(args.godot).resolve()
     if not godot.is_file():
@@ -325,7 +590,6 @@ def main() -> int:
         return 2
 
     DIAGNOSTICS_PATH.mkdir(parents=True, exist_ok=True)
-    APPDATA_PATH.mkdir(parents=True, exist_ok=True)
 
     try:
         if args.install_templates:
@@ -333,91 +597,76 @@ def main() -> int:
             log("PASS: export template installed")
             return 0
 
-        if not args.pack_only:
-            template = resolve_template()
-        else:
-            template = None
+        template = None if args.pack_only else resolve_template()
 
-        BUILD_ROOT.mkdir(parents=True, exist_ok=True)
-        PACKAGE_PATH.mkdir(parents=True, exist_ok=True)
+        paths.build_root.mkdir(parents=True, exist_ok=True)
+        paths.package_path.mkdir(parents=True, exist_ok=True)
         if args.clean:
             log("Cleaning previous outputs of this pipeline")
-            clean_outputs()
+            clean_outputs(paths)
 
         log(f"Godot:    {godot}")
         log(f"Project:  {GAME_PATH}")
         log(f"Template: {template if template else '(pack-only, not used)'}")
+        for name, value in ENGINE_ENV_OVERRIDES.items():
+            log(f"Env {name:<12} = {value}")
+        assert_exclusive_project_access(args.wait_for_exclusive)
+        check_preset_pin(require_files=not args.pack_only)
 
         version = engine_version(godot)
         log(f"Editor version: {version}")
-        if not version.startswith(EXPECTED_ENGINE_PREFIX):
-            raise BuildError(f"Expected Godot {EXPECTED_ENGINE_PREFIX}, got {version}")
+        if version != EXPECTED_ENGINE_VERSION:
+            raise BuildError(
+                f"Editor version {version} does not match the required build "
+                f"{EXPECTED_ENGINE_VERSION}; refusing to build a release package with a "
+                "different engine.")
 
         template_sha = ""
         if template is not None:
             template_sha = sha256_of(template)
             log(f"Template sha256: {template_sha}")
-            template_version = run_stage("template-version", template, ["--version"], PROJECT_ROOT, 60)
-            template_version = template_version.strip().splitlines()[-1].strip()
+            template_version = template_version_of(template)
             log(f"Template version: {template_version}")
             if template_version != version:
                 raise BuildError(
-                    f"Template/editor versions differ: {template_version} versus {version}. "
-                    "Install the export templates that match the editor exactly.")
+                    f"Template/editor versions differ: template {template_version} versus "
+                    f"editor {version}. Install the export templates that match the editor "
+                    "exactly.")
 
-        export_log = DIAGNOSTICS_PATH / "export.log"
-        export_arguments = ["--headless", "--path", str(GAME_PATH), "--log-file", str(export_log)]
+        export_arguments = ["--headless", "--path", str(GAME_PATH),
+                            "--log-file", str(DIAGNOSTICS_PATH / "export.log")]
         if args.pack_only:
-            export_arguments += ["--export-pack", PRESET_NAME, str(PCK_PATH)]
+            export_arguments += ["--export-pack", PRESET_NAME, str(paths.pck)]
         else:
-            export_arguments += ["--export-release", PRESET_NAME, str(EXE_PATH)]
+            export_arguments += ["--export-release", PRESET_NAME, str(paths.exe)]
         log("Exporting...")
-        run_stage("export", godot, export_arguments, GAME_PATH, 900)
+        export_output = run_stage("export", godot, export_arguments, GAME_PATH, 900)
+        for line in export_output.splitlines():
+            if re.search(r"(?i)export|\.pck|savepack", line):
+                log(f"    {line.strip()}")
 
-        if not PCK_PATH.is_file():
+        if not paths.pck.is_file():
             raise BuildError("Export did not produce a PCK.")
-        log(f"PASS: PCK exported ({PCK_PATH.stat().st_size:,} bytes)")
+        log(f"PASS: PCK exported ({paths.pck.stat().st_size:,} bytes)")
+        # Gate 1 (fast, no engine): the pack index must hold a non-empty project.binary.
+        assert_pck_is_launchable(paths.pck)
+        # Gate 2 (audited content): every shipped asset present, no test leakage.
+        audit_checks = run_pack_audit(godot, paths)
         if args.pack_only:
-            log(f"SHA256 {sha256_of(PCK_PATH)}  {PCK_NAME}")
+            log(f"SHA256 {sha256_of(paths.pck)}  {PCK_NAME}")
             return 0
-        if not EXE_PATH.is_file():
+        if not paths.exe.is_file():
             raise BuildError("Export did not produce a release executable.")
-        log(f"PASS: EXE exported ({EXE_PATH.stat().st_size:,} bytes)")
+        log(f"PASS: EXE exported ({paths.exe.stat().st_size:,} bytes)")
 
-        write_engine_notices(godot)
-        (PACKAGE_PATH / "试玩说明.txt").write_text(PACKAGE_README, encoding="utf-8")
+        write_engine_notices(godot, paths)
+        (paths.package_path / "试玩说明.txt").write_text(PACKAGE_README, encoding="utf-8")
 
-        smoke_ok = False
+        smoke_checks = 0
         if args.skip_smoke:
             log("SKIP: gameplay/startup smoke; this build remains unverified.")
         else:
-            # Official release templates disable --main-pack / --script overrides, so the
-            # final data pack is validated with the identical-version editor runtime, and
-            # the real release binary is launched separately for a normal-start check.
-            smoke_script = GAME_PATH / "tests" / "export_smoke_test.gd"
-            screenshot = DIAGNOSTICS_PATH / "package_gameplay.png"
-            output = run_stage(
-                "pck-functional-smoke", godot,
-                ["--main-pack", str(PCK_PATH), "--fixed-fps", "60", "--max-fps", "0",
-                 "--disable-vsync", "--audio-driver", "Dummy", "--script", str(smoke_script),
-                 "--log-file", str(DIAGNOSTICS_PATH / "pck-functional-smoke.log"), "--", str(screenshot)],
-                PACKAGE_PATH, 600,
-            )
-            match = SMOKE_MARKER.search(output)
-            if not match:
-                raise BuildError("Release smoke did not produce its success marker.")
-            checks, failures = int(match.group(1)), int(match.group(2))
-            if failures:
-                raise BuildError(f"Release smoke reported {failures} failure(s) of {checks} checks.")
-            log(f"PASS: final PCK functional smoke under same-version editor runtime ({checks} checks, 0 failures)")
-            run_stage(
-                "release-normal-start", EXE_PATH,
-                ["--fixed-fps", "60", "--audio-driver", "Dummy", "--quit-after", "120",
-                 "--log-file", str(DIAGNOSTICS_PATH / "release-normal-start.log")],
-                PACKAGE_PATH, 180,
-            )
-            log("PASS: real release EXE normal startup (separate from PCK functional smoke)")
-            smoke_ok = True
+            smoke_checks = run_smoke(godot, paths)
 
         build_info = {
             "stage": "P7",
@@ -425,48 +674,48 @@ def main() -> int:
             "configuration": "release",
             "engine_version": version,
             "built_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "built_host": os.environ.get("COMPUTERNAME", "unknown"),
             "template_path": str(template),
             "template_sha256": template_sha,
-            "exe_sha256": sha256_of(EXE_PATH),
-            "pck_sha256": sha256_of(PCK_PATH),
-            "exe_bytes": EXE_PATH.stat().st_size,
-            "pck_bytes": PCK_PATH.stat().st_size,
-            "pck_functional_smoke_verified": smoke_ok,
-            "release_normal_start_verified": smoke_ok,
+            "exe_bytes": paths.exe.stat().st_size,
+            "pck_bytes": paths.pck.stat().st_size,
+            "exe_sha256": sha256_of(paths.exe),
+            "pck_sha256": sha256_of(paths.pck),
+            "pck_functional_smoke_checks": smoke_checks,
+            "pck_functional_smoke_verified": smoke_checks > 0,
+            "release_normal_start_verified": smoke_checks > 0,
             "release_native_input_verified": False,
             "human_playtest_verified": False,
         }
-        (PACKAGE_PATH / "BUILD_INFO.json").write_text(
+        (paths.package_path / "BUILD_INFO.json").write_text(
             json.dumps(build_info, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
-        verify_package_contents()
+        verify_package_contents(paths)
 
-        hash_lines = []
-        for path in sorted(PACKAGE_PATH.iterdir(), key=lambda item: item.name):
-            if path.is_file() and path.name != "SHA256SUMS.txt":
-                hash_lines.append(f"{sha256_of(path)}  {path.name}")
-        (PACKAGE_PATH / "SHA256SUMS.txt").write_text("\n".join(hash_lines) + "\n", encoding="utf-8")
+        hash_lines = [f"{sha256_of(path)}  {path.name}"
+                      for path in sorted(paths.package_path.iterdir(), key=lambda item: item.name)
+                      if path.is_file() and path.name != "SHA256SUMS.txt"]
+        (paths.package_path / "SHA256SUMS.txt").write_text(
+            "\n".join(hash_lines) + "\n", encoding="utf-8")
 
         if args.no_zip:
             log("SKIP: zip archive (--no-zip)")
         else:
-            if ZIP_PATH.exists():
-                ZIP_PATH.unlink()
-            with zipfile.ZipFile(ZIP_PATH, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
-                for path in sorted(PACKAGE_PATH.iterdir()):
+            if paths.zip.exists():
+                paths.zip.unlink()
+            with zipfile.ZipFile(paths.zip, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
+                for path in sorted(paths.package_path.iterdir()):
                     if path.is_file():
                         bundle.write(path, f"{PACKAGE_NAME}/{path.name}")
-            zip_hash = sha256_of(ZIP_PATH)
-            ZipHash(ZIP_PATH).write_text(f"{zip_hash}  {ZIP_PATH.name}\n", encoding="utf-8")
-            log(f"PASS: release package {ZIP_PATH} ({ZIP_PATH.stat().st_size:,} bytes)")
+            zip_hash = sha256_of(paths.zip)
+            paths.zip_hash.write_text(f"{zip_hash}  {paths.zip.name}\n", encoding="utf-8")
+            log(f"PASS: release package {paths.zip} ({paths.zip.stat().st_size:,} bytes)")
             log(f"SHA256: {zip_hash}")
 
         log("")
-        log(f"Output directory: {PACKAGE_PATH}")
-        for path in sorted(PACKAGE_PATH.iterdir()):
+        log(f"Output directory: {paths.package_path}")
+        for path in sorted(paths.package_path.iterdir()):
             if path.is_file():
-                log(f"  {path.name:<26}{path.stat().st_size:>14,} bytes")
+                log(f"  {path.name:<24}{path.stat().st_size:>14,} bytes")
         return 0
     except BuildError as exc:
         log("")

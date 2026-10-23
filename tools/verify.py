@@ -40,6 +40,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 GAME_PATH = PROJECT_ROOT / "godot"
 OUTPUT_PATH = PROJECT_ROOT / ".local" / "validation"
 APPDATA_PATH = PROJECT_ROOT / ".local" / "appdata"
+LOCALAPPDATA_PATH = PROJECT_ROOT / ".local" / "localappdata"
 
 # Engine lines produced by the validation sandbox, not by the game.
 #   * Windows certificate store is not readable in this environment;
@@ -56,11 +57,14 @@ CHECK_PATTERN = re.compile(r"(\d+)\s+checks?,\s*(\d+)\s+failures?")
 
 
 class Check:
-    def __init__(self, name: str, args: list[str], graphical: bool, timeout: int = 300):
+    def __init__(self, name: str, args: list[str], graphical: bool, timeout: int = 300,
+                 packed: bool = False, cwd: Path | None = None):
         self.name = name
         self.args = args
         self.graphical = graphical
         self.timeout = timeout
+        self.packed = packed
+        self.cwd = cwd
 
 
 CHECKS: list[Check] = [
@@ -83,8 +87,17 @@ CHECKS: list[Check] = [
                              "--script", "res://tests/audio_feedback_test.gd"], False),
     Check("vfx-headless", ["--headless", "--fixed-fps", "60", "--audio-driver", "Dummy",
                            "--script", "res://tests/vfx_feedback_test.gd"], False),
-    Check("export-smoke", ["--headless", "--fixed-fps", "60",
-                           "--script", "res://tests/export_smoke_test.gd"], False),
+    # Robustness (focus loss, repeated restart, card re-entry, UI contract). Headless is
+    # sufficient: only the "focus release restores the cursor" assertion needs a real
+    # window and skips itself with a printed reason. Windowed focus loss is still covered
+    # end-to-end by the graphical integration suites and by tools/smoke_test.gd.
+    Check("robustness", ["--headless", "--fixed-fps", "60", "--audio-driver", "Dummy",
+                         "--script", "res://tests/robustness_test.gd"], False),
+    # NOTE: export-smoke is intentionally NOT part of the default suites. It is an
+    # external-PCK fixture (docs/BUILD_WINDOWS.md): it needs a finished .pck via
+    # --main-pack, a real window with focus, and it asserts the pack excludes tests.
+    # Running it from source, headless, or without a pack fails structurally, so it
+    # is registered only when a pack is supplied with --packed <path>.
     # Graphical checks: real window, real Forward+ rendering, injected input.
     Check("main-window", ["--fixed-fps", "60", "--disable-vsync", "--audio-driver", "Dummy",
                           "--script", "res://tests/main_scene_smoke_test.gd"], True),
@@ -157,12 +170,18 @@ def classify(output: str) -> list[str]:
     return failures
 
 
-def run_check(check: Check, godot: str) -> dict:
+def run_check(check: Check, godot: str, cwd: Path | None = None) -> dict:
     log_path = OUTPUT_PATH / f"{check.name}.log"
-    cmd = [godot, "--path", str(GAME_PATH), "--log-file", str(log_path),
-           "--max-fps", "0", *check.args]
+    work_dir = cwd if cwd is not None else PROJECT_ROOT
+    project_args: list[str] = [] if check.packed else ["--path", str(GAME_PATH)]
+    cmd = [godot, *project_args, "--log-file", str(log_path), "--max-fps", "0", *check.args]
     env = dict(os.environ)
+    # Redirect both user-data roots: APPDATA holds editor settings, LOCALAPPDATA holds
+    # the editor cache directory. Redirecting only APPDATA still makes Godot attempt
+    # C:/Users/<user>/AppData/Local/Godot and emit "Could not create editor cache
+    # directory" errors during --import, which would fail the import check.
     env["APPDATA"] = str(APPDATA_PATH)
+    env["LOCALAPPDATA"] = str(LOCALAPPDATA_PATH)
     started = time.time()
     try:
         completed = subprocess.run(
@@ -227,6 +246,9 @@ def main() -> int:
     parser.add_argument("--only", default="", help="comma separated check names")
     parser.add_argument("--json", default="", help="write summary JSON to this path")
     parser.add_argument("--no-references", action="store_true", help="skip reference validation")
+    parser.add_argument("--packed", default="",
+                        help="path to a finished .pck; registers the external-PCK export smoke check "
+                             "and runs it as its own graphical suite")
     args = parser.parse_args()
 
     if not Path(args.godot).is_file():
@@ -235,14 +257,43 @@ def main() -> int:
 
     OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
     APPDATA_PATH.mkdir(parents=True, exist_ok=True)
+    LOCALAPPDATA_PATH.mkdir(parents=True, exist_ok=True)
+
+    packed_checks: list[Check] = []
+    if args.packed:
+        pack_path = Path(args.packed).resolve()
+        if not pack_path.is_file():
+            print(f"FATAL: pack not found: {pack_path}", file=sys.stderr)
+            return 2
+        fixture = (GAME_PATH / "tests" / "export_smoke_test.gd").resolve()
+        audit = (PROJECT_ROOT / "tools" / "pack_audit.gd").resolve()
+        screenshot = OUTPUT_PATH / "export_smoke_screenshot.png"
+        # Content audit first: cheap, headless, no window, and it fails loudly when a
+        # cue/model/scene is missing from the pack or a development test leaked in.
+        packed_checks.append(Check(
+            "pack-audit",
+            ["--headless", "--main-pack", str(pack_path),
+             "--audio-driver", "Dummy", "--script", str(audit)],
+            graphical=False, timeout=180, packed=True, cwd=pack_path.parent,
+        ))
+        # Then the real packed-data game fixture, which needs a window for pointer
+        # input and mouse capture.
+        packed_checks.append(Check(
+            "export-smoke",
+            ["--main-pack", str(pack_path),
+             "--fixed-fps", "60", "--disable-vsync", "--audio-driver", "Dummy",
+             "--script", str(fixture), "--", str(screenshot)],
+            graphical=True, timeout=300, packed=True, cwd=pack_path.parent,
+        ))
 
     selected = [name.strip() for name in args.only.split(",") if name.strip()]
+    all_checks = CHECKS + packed_checks
     if selected:
-        unknown = set(selected) - {c.name for c in CHECKS}
+        unknown = set(selected) - {c.name for c in all_checks}
         if unknown:
             print(f"FATAL: unknown check(s): {', '.join(sorted(unknown))}", file=sys.stderr)
             return 2
-    plan = [c for c in CHECKS if (not selected or c.name in selected)]
+    plan = [c for c in all_checks if (not selected or c.name in selected)]
     if args.headless_only:
         plan = [c for c in plan if not c.graphical]
 
@@ -260,7 +311,7 @@ def main() -> int:
             return 1
 
     started = time.time()
-    results = [run_check(check, args.godot) for check in plan]
+    results = [run_check(check, args.godot, check.cwd) for check in plan]
     if args.headless_only:
         print("SKIP: graphical input/physics suite and Forward+ rendering; "
               "they require a desktop session. Run without --headless-only to cover them.")
