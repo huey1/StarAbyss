@@ -129,7 +129,7 @@ py tools\verify.py
 
 完整验收会打开普通主场景，再在窗口中注入输入和执行真实物理步进，生成 P2/P3/P4 预览。集成测试关闭持续绘制，并对截图显式调用 Forward+ 绘制；不代表性能基准。P4 检查 1280×720 与 1920×1080。运行期间请不要操作窗口或移动鼠标。日志在 `.local/validation/`；任一脚本、资源或引擎错误均导致失败。headless 无法代替窗口输入与渲染验收。
 
-`tools/verify.py` 为测试隔离把 `APPDATA`/`LOCALAPPDATA` 定向到项目内 `.local/`；`tools/build_windows.py` 同样把 `APPDATA`/`LOCALAPPDATA`/`TEMP`/`TMP` 全部定向到 `.local/`——本验证环境禁止引擎写工作区外的路径，不重定向 `TEMP` 会导致导出的包内 `project.binary` 为 0 字节（包不可启动，但导出仍返回 0）。导出模板因此放在 `.local/export_templates/4.7.2.stable/`，由 `export_presets.cfg` 的 `custom_template/release` 显式指定。受限沙箱可能禁止读取 Windows 证书库，应在允许系统访问的环境执行验收。
+`tools/verify.py` 为测试隔离把 `APPDATA`/`LOCALAPPDATA` 定向到项目内 `.local/`；`tools/build_windows.py` 同样把 `APPDATA`/`LOCALAPPDATA`/`TEMP`/`TMP` 全部定向到 `.local/`——本验证环境禁止引擎写工作区外的路径，不重定向 `TEMP` 会导致导出的包内 `project.binary` 为 0 字节（包不可启动，但导出仍返回 0）。因为 `APPDATA` 被重定向，Godot 自己的标准模板路径 `<APPDATA>/Godot/export_templates/4.7.2.stable/` 物理上落在 `.local/appdata/` 内，所以 `export_presets.cfg` 的 `custom_template/debug`、`custom_template/release` **都留空**，走引擎原生查找。受限沙箱可能禁止读取 Windows 证书库，应在允许系统访问的环境执行验收。
 
 人工步骤和验证边界见 [docs/TESTING.md](docs/TESTING.md)，技术架构见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，环境记录见 [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)。
 

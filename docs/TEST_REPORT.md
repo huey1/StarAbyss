@@ -222,14 +222,51 @@ SCRIPT ERROR: Invalid access to property or key 'skeleton' on a base object of t
 
 ---
 
-## 6. L4 发布 exe 原生输入（待执行）
+## 6. L4 发布 exe 原生输入 —— **已执行，PASS**
 
-**状态：未执行。原因：发布 exe 尚不存在**（导出模板仍在下载，`builds/` 下无 exe）。
+**验证对象（真实发布产物，不是工程源码）**
+```text
+exe  .local\export-diagnostics\isolated\exe_with_pck\StarAbyss.exe
+     109,268,480 字节  sha256 d34d36f3be1a6c49c56525ae86469b92e4f417ddf0b43cf00dd80c385c4b0562
+pck  .local\export-diagnostics\isolated\exe_with_pck\StarAbyss.pck
+     3,166,556 字节    sha256 32e8588bea0bc77d8c45983848d8f2313c6462d11090fc502d28f910b8319f0a
+启动: cwd = 包目录，直接运行 exe（无 --path / 无 --main-pack，exe 与 pck 必须同目录）
+```
+工具：`.local/validation/native_input_check.ps1` —— PS 5.1 + `Add-Type` 调 `user32`（`keybd_event` / `mouse_event` / `SetCursorPos` / `SetForegroundWindow` / `ShowWindow` / `GetClientRect` / `ClientToScreen`），`System.Drawing.CopyFromScreen` 抓**客户区**，C# `LockBits` 做像素统计与差异，输出 `native_input_result.json`。
 
-- 已验证条件：本机图形模式可用（Vulkan / Forward+，真实窗口能打开并渲染），因此该层**可执行**，只是缺产物。
-- 已准备好脚本：`.local/validation/native_input_check.ps1`（PS 5.1 + `Add-Type` 调 `user32` 的 `SetCursorPos`/`mouse_event`/`keybd_event`，`System.Drawing` 的 `CopyFromScreen` 截图，C# `LockBits` 做像素差异统计，输出 `native_input_result.json`）。
-- 判据（产出后填）：菜单→战斗 画面变化比例、按住 W 后 画面继续变化比例，两者均需 ≥ 2%。
-- **措辞边界**：本层只能写成"**真实 exe 的原生输入已由 OS 级注入 + 画面差异佐证**"，**不得**写成"完整闭环已在发布 exe 上验证"——闭环由 L2（源码）+ L3（包内数据）相加覆盖。
+### 6.1 三步判据（每步都是真注入 + 真截图 + 数值）
+
+| 步骤 | 注入 | 变化像素占比 | 变化后帧签名 | 判定 |
+| --- | --- | --- | --- | --- |
+| 基线（主菜单） | – | – | **lum 25.4 / 117 色** | 与 `main_menu_preview`（25.4/117）**完全吻合** |
+| **1. 开始本局** | `keybd_event` Enter | **94.77%** | lum 133.5 / 372 色 | **CHANGED** |
+| 　└ 过渡结束后稳定帧（+2.2 s） | – | – | **lum 133.6 / 311 色**（房间参照 134.4/275、战斗 73.6/257） | **确认进入 3D 房间**（`room_signature=True`） |
+| **2. 按住 W 1.6 s** | `keybd_event` W | **3.55%** | lum 133.5 / 339 色 | **CHANGED** |
+| **3. Esc** | `keybd_event` Esc | **4.25%** | lum 133.9 / 368 色 | **CHANGED** |
+| **退出** | `WM_CLOSE` | – | 退出码 **0** | 正常退出，无残留进程 |
+
+判定阈值 2%（变化像素占比）。**客户区实测 1280×720**；抓客户区而非整窗很关键——整窗（含标题栏/边框）测得的是 1296×759，容易误判成"渲染分辨率不对"。
+
+### 6.2 启动耗时（"进程启动 → 首个可识别画面"）
+
+| 场景 | 窗口句柄出现 | **首个可识别画面**（主菜单） |
+| --- | --- | --- |
+| **冷启动**（全新空 `APPDATA`，零 shader 缓存） | 1960 ms | **3301 ms** |
+| 暖启动（×3，同目录连续） | 1853 / 1856 / 1952 / 1953 ms | **2471 / 2644 / 2993 ms** |
+
+**解读**：发布包冷启动 ≈ 3.3 s、暖启动 ≈ 2.5–3.0 s 出现主菜单，**冷/暖只差 0.3–0.6 s**——说明导出包已用 `shader_baker` 预编译掉大部分着色器开销，剩余主要是引擎/进程初始化，而不是着色器编译（工程内实测的"冷启动首帧 3548 ms"不能直接外推到发布包）。
+
+> **作废数据**：曾上报的 `5259 ms` 作废——那一次 `SetForegroundWindow` 被 Windows 焦点窃取保护拒绝，采到的帧无效（详见 §8 DEF-05）。
+
+### 6.3 措辞边界（必须遵守）
+
+- 本层的结论只能写成：**"在真实发布 exe 上，OS 级注入的 Enter / W / Esc 均引起画面变化（94.77% / 3.55% / 4.25%），且启动后稳定帧签名与房间参照图一致，退出码 0"**。
+- 这是**输入链路 + 渲染响应的机械佐证**，**不等于人工试玩验证**：`human_playtest_verified` 恒为 **`false`**，手感、平衡、5–8 分钟局时仍归人工验收与 L2 闭环。
+- 不得写成"完整闭环已在发布 exe 上验证"——闭环由 L2（源码）+ L3（包内数据）相加覆盖。
+
+### 6.4 结论
+
+**L4 PASS**：上线 Gate 的"发布 exe 有原生输入响应"这一项**已用真实产物证明**。证据：`.local/validation/native_input_result.json`、`native_input_before.png`（菜单）/`after_click.png`/`after_start_settled.png`（房间）/`after_move.png`/`after_esc.png`（全部 1280×720、非空白、黑像素 ≤0.2%）、`native_input_result_startup.json`（暖启动计时）。
 
 ---
 

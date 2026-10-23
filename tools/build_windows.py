@@ -66,6 +66,9 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 GAME_PATH = PROJECT_ROOT / "godot"
 DEFAULT_BUILD_ROOT = PROJECT_ROOT / "builds" / "windows"
 DIAGNOSTICS_PATH = PROJECT_ROOT / ".local" / "export-diagnostics"
+# Artefacts retired by --clean are moved here (timestamped) instead of being deleted, so a
+# build that fails after cleaning can never leave the tree without a usable package.
+PREVIOUS_BUILD_PATH = DIAGNOSTICS_PATH / "previous_build"
 
 # Build invariant: NOTHING may be written outside the workspace (D:\game); this
 # environment sandboxes the engine to that tree. Every user directory the engine would
@@ -393,31 +396,46 @@ def template_version_evidence() -> tuple[str, Path]:
             reported = template_version_of(candidate)
         except BuildError as exc:
             rejected.append(f"{candidate.name}: --version gave {str(exc).splitlines()[0]}")
-        embedded = embedded_version(candidate)
+        try:
+            data = candidate.read_bytes()
+        except OSError as exc:
+            rejected.append(f"{candidate.name}: unreadable ({exc})")
+            continue
+        embedded = embedded_version(data)
         if reported and not re.match(r"^\d+\.\d+\.\d+\.", reported):
             rejected.append(f"{candidate.name}: unexpected --version output {reported!r}")
             continue
-        if reported and embedded and reported != embedded:
+        # The embedded copy may omit the build hash ("4.7.2.stable.official"), so the two
+        # are compared as prefixes rather than for equality.
+        if reported and embedded and not (reported.startswith(embedded)
+                                          or embedded.startswith(reported)):
             raise BuildError(
                 f"Template {candidate.name} reports {reported} but embeds {embedded}.")
         if not reported and not embedded:
+            rejected.append(f"{candidate.name}: no version evidence (--version and byte scan)")
             continue
-        version = reported or embedded
-        log(f"  version evidence from {candidate.name}: --version={reported or '(pipe output empty)'} "
+        version = max((reported, embedded), key=len)
+        # If the hash part is missing from the version string, require it in the bytes.
+        expected_hash = EXPECTED_ENGINE_VERSION.split(".")[-1]
+        if version != EXPECTED_ENGINE_VERSION:
+            if data.find(expected_hash.encode("ascii")) < 0:
+                raise BuildError(
+                    f"Template {candidate.name} only yields {version!r} and does not contain "
+                    f"the expected build hash {expected_hash!r}.")
+            log(f"  build hash {expected_hash} found inside {candidate.name}; "
+                f"version strings observed: --version={reported or '(empty pipe)'} "
+                f"embedded={embedded or '(not found)'}")
+            return EXPECTED_ENGINE_VERSION, candidate
+        log(f"  version evidence from {candidate.name}: --version={reported or '(empty pipe)'} "
             f"embedded={embedded or '(not found)'}")
         return version, candidate
     detail = "\n  ".join(rejected) if rejected else "no template installed"
     raise BuildError(f"Could not establish the engine version of any installed template:\n  {detail}")
 
 
-def embedded_version(binary: Path) -> str:
-    """Locate the engine version string inside a template binary."""
-    try:
-        data = binary.read_bytes()
-    except OSError as exc:
-        log(f"  note: could not read {binary} for a version scan ({exc})")
-        return ""
-    match = re.search(rb"(4\.\d+\.\d+\.stable\.official\.[0-9a-f]{9})", data)
+def embedded_version(data: bytes) -> str:
+    """Locate the engine version string inside template binary bytes."""
+    match = re.search(rb"(4\.\d+\.\d+\.stable\.official(?:\.[0-9a-f]{7,9})?)", data)
     return match.group(1).decode("ascii") if match else ""
 
 
@@ -565,17 +583,32 @@ def assert_pck_is_launchable(pck: Path) -> int:
 
 
 def clean_outputs(paths: Paths) -> None:
-    """Remove only files this pipeline owns; never delete a directory tree."""
+    """Retire the previous artefacts into .local/previous_build/<stamp> instead of deleting.
+
+    Only files this pipeline owns are touched, one by one; no directory tree is ever
+    removed and unknown files are left alone (verify_package_contents() then fails loudly
+    rather than silently deleting somebody else's file).
+
+    Moving instead of deleting is deliberate: this was learned the hard way when
+    "--clean then a build that fails during preflight" emptied builds/ and destroyed the
+    only copy of a package others were still testing.
+    """
     owned = [paths.exe, paths.pck, paths.zip, paths.zip_hash,
              paths.package_path / "试玩说明.txt",
              paths.package_path / "GODOT_LICENSE.txt",
              paths.package_path / "THIRD_PARTY_NOTICES.json",
              paths.package_path / "BUILD_INFO.json",
              paths.package_path / "SHA256SUMS.txt"]
+    archive = PREVIOUS_BUILD_PATH / time.strftime("%Y%m%d-%H%M%S")
+    retired = 0
     for path in owned:
         if path.is_file():
-            path.unlink()
-            log(f"  removed {path}")
+            archive.mkdir(parents=True, exist_ok=True)
+            path.replace(archive / path.name)
+            retired += 1
+            log(f"  retired {path}")
+    if retired:
+        log(f"  {retired} file(s) kept in {archive} (a failed build never destroys them)")
 
 
 def write_engine_notices(godot: Path, paths: Paths) -> None:
@@ -642,6 +675,10 @@ def run_smoke(godot: Path, paths: Paths) -> dict:
     Returns the two independent verification results separately: loading the pack with
     the editor runtime does NOT prove that the release binary starts, so the two flags
     must never share a source.
+
+    Both stages run with the working directory set to the package directory and launch
+    the exported artefacts by absolute path, so nothing can fall back to the source
+    project under godot/.
     """
     # Official release templates disable --main-pack / --script overrides, so the
     # final data pack is validated with the identical-version editor runtime, and
@@ -671,6 +708,8 @@ def run_smoke(godot: Path, paths: Paths) -> dict:
          "--log-file", str(DIAGNOSTICS_PATH / "release-normal-start.log")],
         paths.package_path, 180,
     )
+    log(f"    cwd: {paths.package_path}   exe: {paths.exe}   (no --path, so the shipped "
+        f"pck next to the exe is what runs)")
     # The release binary is a GUI-subsystem executable: its stdout is only reliable when
     # it is a pipe, so the engine log file is checked as evidence as well.
     start_log = DIAGNOSTICS_PATH / "release-normal-start.log"
@@ -690,7 +729,122 @@ def run_smoke(godot: Path, paths: Paths) -> dict:
         "pck_smoke_checks": checks,
         "pck_smoke_verified": True,
         "normal_start_verified": True,
+        "start_cwd": str(paths.package_path),
+        "start_exe": str(paths.exe),
     }
+
+
+def verify_package(target: Path, godot: Path) -> int:
+    """Clean-room check: unpack a built package into a fresh directory and start it there.
+
+    This is what a player does, so it is a separate gate from the build: the artefact is
+    extracted somewhere new (never reusing the build directory), file hashes are compared
+    against SHA256SUMS.txt, and the executable is launched with its working directory set
+    to the extraction root -- with no --path override, so only the shipped data can load.
+    """
+    target = target.resolve()
+    if not target.exists():
+        raise BuildError(f"Nothing to verify at {target}")
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    room = DIAGNOSTICS_PATH / "cleanroom" / stamp
+    room.mkdir(parents=True, exist_ok=True)
+    log(f"Clean-room directory: {room}")
+
+    if target.is_dir():
+        shutil.copytree(target, room, dirs_exist_ok=True)
+        source_description = f"directory {target}"
+    else:
+        try:
+            with zipfile.ZipFile(target) as bundle:
+                bad_member = bundle.testzip()
+                if bad_member:
+                    raise BuildError(f"Release archive is corrupt at member {bad_member}")
+                names = bundle.namelist()
+                bundle.extractall(room)
+        except zipfile.BadZipFile as exc:
+            raise BuildError(f"Release archive is not a readable zip: {exc}") from exc
+        source_description = f"zip {target} ({len(names)} entries)"
+        log(f"  extracted {len(names)} entries")
+        for name in names:
+            if os.path.basename(name) == "StarAbyss.pck" and not name.startswith(
+                    os.path.basename(os.path.dirname(name)) + "/"):
+                raise BuildError(
+                    f"Archive member {name} would unpack outside its own folder; refusing.")
+
+    log(f"  source: {source_description}")
+    # The exe sits either at the room root or inside a single package folder.
+    candidates = sorted(room.rglob(EXE_NAME))
+    if not candidates:
+        raise BuildError(f"Package contains no {EXE_NAME}")
+    if len(candidates) > 1:
+        raise BuildError(f"Package contains {len(candidates)} copies of {EXE_NAME}: "
+                         + ", ".join(str(path) for path in candidates))
+    exe = candidates[0]
+    pack = exe.with_suffix(".pck")
+    if not pack.is_file():
+        raise BuildError(f"{EXE_NAME} has no {pack.name} next to it; the package cannot run.")
+
+    # Verify the shipped hashes rather than trusting the copy.
+    sums = exe.parent / "SHA256SUMS.txt"
+    checked = 0
+    if sums.is_file():
+        for line in sums.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            expected, _, name = line.partition("  ")
+            candidate = exe.parent / name.strip()
+            if not candidate.is_file():
+                raise BuildError(f"SHA256SUMS.txt lists {name!r} but the package lacks it.")
+            actual = sha256_of(candidate)
+            if actual != expected.strip().lower():
+                raise BuildError(
+                    f"Hash mismatch for {name}: SHA256SUMS.txt says {expected.strip()} "
+                    f"but the file is {actual}")
+            checked += 1
+        log(f"PASS: {checked} file hash(es) match SHA256SUMS.txt")
+    else:
+        log("  note: package has no SHA256SUMS.txt; hashes are not cross-checked here")
+
+    log(f"  exe: {exe} ({exe.stat().st_size:,} bytes)")
+    log(f"  pck: {pack} ({pack.stat().st_size:,} bytes)  sha256 {sha256_of(pack)}")
+    log(f"  launching with cwd = {exe.parent}")
+
+    env_backup = {name: os.environ.get(name) for name in ENGINE_ENV_OVERRIDES}
+    os.environ.update(ENGINE_ENV_OVERRIDES)
+    try:
+        log_path = DIAGNOSTICS_PATH / "cleanroom-start.log"
+        completed = subprocess.run(
+            [str(exe), "--quit-after", "120", "--audio-driver", "Dummy",
+             "--log-file", str(log_path)],
+            cwd=exe.parent, env=os.environ.copy(), capture_output=True, text=True, timeout=180)
+    finally:
+        for name, value in env_backup.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+    if completed.returncode != 0:
+        raise BuildError(f"Clean-room launch exited with {completed.returncode}")
+    evidence = (completed.stdout or "") + (completed.stderr or "")
+    if log_path.is_file():
+        evidence += "\n" + log_path.read_text(encoding="utf-8", errors="replace")
+    if re.search(r"(?m)^\s*(SCRIPT ERROR|SHADER ERROR|Parse Error)", evidence):
+        raise BuildError("Clean-room launch reported script/shader errors.")
+    if "Forward+" not in evidence:
+        raise BuildError("Clean-room launch did not report the Forward+ renderer.")
+    for line in dict.fromkeys(
+            item.strip() for item in evidence.splitlines()
+            if re.search(r"(?i)Vulkan|Forward\+|Godot Engine v|Using Device", item)):
+        log(f"    {line}")
+    stray = [path.name for path in exe.parent.iterdir()
+             if path.is_file() and path.name not in
+             {EXE_NAME, PCK_NAME, "试玩说明.txt", "GODOT_LICENSE.txt",
+              "THIRD_PARTY_NOTICES.json", "BUILD_INFO.json", "SHA256SUMS.txt"}]
+    if stray:
+        log(f"  note: the run created files next to the exe: {', '.join(sorted(stray))}")
+    log(f"PASS: clean-room launch from {exe.parent} (exit 0, Forward+, no script errors)")
+    return 0
 
 
 def main() -> int:
@@ -701,10 +855,15 @@ def main() -> int:
                         help="Build output root (default: builds/windows)")
     parser.add_argument("--install-templates", default="", metavar="TPZ",
                         help="Extract the release template from an official .tpz archive and exit")
+    parser.add_argument("--verify-package", default="", metavar="ZIP_OR_DIR",
+                        help="Unpack a built package into a fresh directory, launch it from "
+                             "there and report the result (clean-room verification)")
     parser.add_argument("--force-templates", action="store_true",
                         help="Re-extract the template even if one is already installed")
     parser.add_argument("--clean", action="store_true",
-                        help="Remove previous outputs of this pipeline before building")
+                        help="Retire previous outputs of this pipeline before building "
+                             "(moved to .local/export-diagnostics/previous_build/<stamp>, "
+                             "never deleted)")
     parser.add_argument("--pack-only", action="store_true", help="Export only the PCK (diagnostic)")
     parser.add_argument("--skip-smoke", action="store_true",
                         help="Skip gameplay/startup smoke checks (the build stays unverified)")
@@ -714,9 +873,6 @@ def main() -> int:
     args = parser.parse_args()
 
     godot = Path(args.godot).resolve()
-    if not godot.is_file():
-        log(f"FATAL: Godot editor not found: {godot}")
-        return 2
 
     DIAGNOSTICS_PATH.mkdir(parents=True, exist_ok=True)
 
@@ -726,23 +882,28 @@ def main() -> int:
             log("PASS: export template installed")
             return 0
 
+        if args.verify_package:
+            # Needs no editor: it launches the shipped executable, exactly like a player.
+            return verify_package(Path(args.verify_package), godot)
+
+        if not godot.is_file():
+            log(f"FATAL: Godot editor not found: {godot}")
+            return 2
+
         # The release archive must carry the project's own version, never a hard-coded one.
         version_tag = project_version()
         paths = Paths.from_root(Path(args.out).resolve(), version_tag)
 
         template = None if args.pack_only else resolve_template()
 
-        paths.build_root.mkdir(parents=True, exist_ok=True)
-        paths.package_path.mkdir(parents=True, exist_ok=True)
-        if args.clean:
-            log("Cleaning previous outputs of this pipeline")
-            clean_outputs(paths)
-
         log(f"Godot:    {godot}")
         log(f"Project:  {GAME_PATH}")
         log(f"Template: {template if template else '(pack-only, not used)'}")
         for name, value in ENGINE_ENV_OVERRIDES.items():
             log(f"Env {name:<12} = {value}")
+
+        # ---- preflight: everything that can be checked without exporting happens first,
+        # ---- so a failure here leaves the previous package completely untouched.
         assert_exclusive_project_access(args.wait_for_exclusive)
         check_preset_pin(require_files=not args.pack_only)
 
@@ -774,6 +935,13 @@ def main() -> int:
         check_scripts_parse(godot)
         sources_before = source_snapshot()
 
+        # Only now, with every preflight check green, are the previous artefacts retired.
+        paths.build_root.mkdir(parents=True, exist_ok=True)
+        paths.package_path.mkdir(parents=True, exist_ok=True)
+        if args.clean:
+            log("Retiring previous outputs of this pipeline")
+            clean_outputs(paths)
+
         export_arguments = ["--headless", "--path", str(GAME_PATH),
                             "--log-file", str(DIAGNOSTICS_PATH / "export.log")]
         if args.pack_only:
@@ -804,7 +972,7 @@ def main() -> int:
         (paths.package_path / "试玩说明.txt").write_text(PACKAGE_README, encoding="utf-8")
 
         smoke = {"pck_smoke_checks": 0, "pck_smoke_verified": False,
-                 "normal_start_verified": False}
+                 "normal_start_verified": False, "start_cwd": "", "start_exe": ""}
         if args.skip_smoke:
             log("SKIP: gameplay/startup smoke.")
             log("WARNING: without the smoke fixture this package is NOT a release "
@@ -842,6 +1010,11 @@ def main() -> int:
             "pck_functional_smoke_checks": smoke["pck_smoke_checks"],
             "pck_functional_smoke_verified": smoke["pck_smoke_verified"],
             "release_normal_start_verified": smoke["normal_start_verified"],
+            # Evidence trail for the launch check: the working directory and the exact
+            # executable, so "it started the shipped build, not the source project" is
+            # auditable from this file alone.
+            "release_start_cwd": smoke["start_cwd"],
+            "release_start_exe": smoke["start_exe"],
             "release_native_input_verified": False,
             "human_playtest_verified": False,
             "release_candidate_eligible": release_candidate_eligible,

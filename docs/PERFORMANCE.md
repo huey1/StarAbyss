@@ -11,7 +11,13 @@
 因此本阶段不做任何优化改动，不改渲染/阴影/后处理/材质/导入参数，不改代码。**
 
 判定依据与判据说明见第 4 节，逐相位数据见第 5–7 节，异常长帧分析见第 8 节。
-需要人工复核的两点已明确记录：进入游戏时的一次性首次编译停顿（第 8.2 节）与 720p 下引擎报告的根渲染目标尺寸（第 9 节）。
+两点曾需人工复核的事项现已结案：720p 下引擎报告的根渲染目标尺寸（第 9 节，实测**非缺陷**）、
+进入游戏时的一次性首次编译停顿（第 8.2 节，保留为已知限制，需在导出包上复核）。
+
+**定稿复测（2026-10-23 13:03–13:17）：**音频（27 cue + 环境床）与 VFX（威胁脉冲/火花/冲击环）全部接入后，
+用同两条命令复测两个分辨率的上限 60 数据：**平均 FPS 59.2–60.0、帧时间 p95 16.74–17.96 ms、
+draw calls 峰值 583 / p95 530、primitives 峰值 161,671 —— 与接入前一致，结论不变：达标，不做优化。**
+复测原始数据、以及一次“+50% GPU 帧时间”误报的撤回与 shader A/B 归因，见第 12 节。
 
 | 分辨率（窗口） | 帧率上限 | 平均 FPS（房1 / 房2 / Boss） | 帧时间 p50 / p95 / p99（战斗相位区间） | GPU 帧时间 p95 | draw calls p95 | 结论 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -64,12 +70,39 @@ $env:LOCALAPPDATA='D:\game\StarAbyss\.local\localappdata'
 & $G --path D:\game\StarAbyss\godot --disable-vsync `
     --script ../tools/performance_probe.gd -- --label=720p-uncapped --resolution=1280x720 --fps=0 --rounds=1
 
-# E. 渲染目标尺寸事实核查（不开游戏流程，只打印窗口/视口/纹理尺寸）
+# E. 渲染目标尺寸事实核查（不开游戏流程，只打印窗口/视口/纹理尺寸 + 存呈现 PNG）
 & $G --path D:\game\StarAbyss\godot --disable-vsync `
     --script ../tools/performance_probe.gd -- --mode=info --resolution=1280x720
+
+# F. A/B 归因实验（2026-10-23 13:15–13:17 实际使用的脚本，含自动恢复 + 自证）
+powershell -NoProfile -ExecutionPolicy Bypass -File D:\game\StarAbyss\.local\ab\run_ab.ps1
 ```
 
-`tools/benchmark.ps1` 已同步改为可由 Windows PowerShell 5.1 运行，并可一次产出上述 A–D 的任意组合（见其 `-help`）。
+`tools/benchmark.ps1` 已同步改为可由 Windows PowerShell 5.1 运行，并可一次产出上述 A–D 的任意组合：
+
+```powershell
+# 本机执行策略拒绝未签名脚本，必须带 -ExecutionPolicy Bypass（否则报 "not digitally signed"）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\benchmark.ps1                      # 1080p capped 60
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\benchmark.ps1 -Resolution 1280x720 -FrameCap 60 -Label 720p60
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\benchmark.ps1 -FrameCap 0 -Label 1080p-uncapped
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\benchmark.ps1 -Info -Resolution 1280x720
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\benchmark.ps1 -Matrix                # 2 分辨率 × capped/uncapped
+```
+
+探针的额外参数：`--mode=run|info`、`--resolution=WxH`、`--fps=N`（0 = 不限帧）、`--rounds=1..3`、
+`--stretch=off`（关闭 `canvas_items` 对照）、`--stop-after-room=2`（只测到 room_2_combat 结束，A/B 用，单次约 25 s）。
+
+**工具验证程度（如实声明）**：本文件第 5–7、12 节的**所有数据都不是经 `tools/benchmark.ps1` 产出的**，
+而是用上面的直接引擎命令（B–E）与 `.local/ab/run_ab.ps1` 产出，因此包装脚本的任何问题都不会影响这些结论。
+`benchmark.ps1` 本身：`-Info` 路径修复前后各实测过一次（修复前暴露"多行 JSON 只打印首行"的缺陷），
+`-Suite probe` 数据路径在修好报告文件名后**尚未端到端复跑**；下次采集时用
+`-Suite probe -FrameCap 60 -Label toolcheck` 复验即可（约 60 s）。
+
+**脚本陷阱（已踩过两次，务必遵守）**：Windows PowerShell 5.1 会把原生命令的 stderr 包装成 `NativeCommandError`，
+在 `$ErrorActionPreference='Stop'` 下会**直接终止整个采集脚本**（症状：作业 exit 1、产物只有开头几行、没有 JSON）。
+Godot 每次启动都会往 stderr 打一行 `ERROR: Failed to read the root certificate store.` 就足以触发。
+规避：把 `$ErrorActionPreference` 设为 `'Continue'`，或用 `[System.Diagnostics.Process]::Start()` +
+`RedirectStandardOutput/Error`（`tools/benchmark.ps1` 已采用后者）。
 
 ### 采样方式
 
@@ -205,8 +238,26 @@ draw call 与 primitive 数在两种分辨率下**完全一致**（同一批场�
 
 结论与边界：这是 Godot 首次使用的着色器/管线编译 + 场景资源加载，**每个进程生命周期只发生一次**（不是每局、不是每房）；
 暖缓存下约 0.2 s，可接受。冷缓存 3.5 s 属于“首启动可见停顿”，本次未优化（改动涉及预加载/预热策略，属于行为变更，
-不在“实测达标就不动代码”的范围内）。**建议 T10 在真实导出包上复测一次**：导出包若包含着色器/管线缓存，该停顿会显著缩短；
-若仍为秒级，则应作为 T9 缺陷候选另行处理（冷启动无反馈的秒级卡顿影响首发体验）。
+不在“实测达标就不动代码”的范围内）。
+
+**导出包旁证（QA 在 RC0 包上的实测，2026-10-23 13:1x，OS 级截图判据）：**
+
+| 场景 | 进程启动 → 窗口句柄出现 | 进程启动 → 首个可识别画面（主菜单） |
+| --- | --- | --- |
+| 冷启动（全新空 `APPDATA`，零 shader 缓存） | 1960 ms | **3301 ms** |
+| 暖启动 ×3 | 1952 / 1856 / 1953 ms | 2644 / 2993 / 2471 ms |
+
+判读：**冷/暖只差 0.3–0.6 s**，说明导出包的启动耗时主要是引擎/进程初始化，**着色器部分已被
+`export_presets.cfg` 的 `shader_baker/enabled=true` 预编译掉**——这印证了本节对"3.5 s 停顿是编辑器内首次编译"的判断。
+
+**注意：这两组数字测的不是同一步，不能互相替代。**
+- 本节的 3548 ms 是**编辑器内**「点击开始 →「进入首房」的首帧」（3D 场景首次绘制）；
+- QA 的 2.5–3.3 s 是**导出包**「进程启动 →「主菜单」首帧」（几乎纯 2D UI，主菜单实测只有 40 draw calls / 1,662 primitives）。
+
+因此**仍缺一项事实**：导出包上「点击开始 → 首房首帧」的耗时。这才是玩家最容易感知的那一次转场。
+解锁条件：在导出包上跑一次完整进房流程并记录该转场耗时（Lead 的 `tools/startup_probe.py` 或包内 3D 首帧计时均可）。
+- 若 < 0.5 s → 关闭本项，只在发布说明保留“首次启动需初始化引擎”一句；
+- 若仍为秒级且无任何加载反馈 → 升级为体验缺陷，由 Lead 决定是否加“加载中/编译着色器”提示（属行为变更）。
 
 ### 8.3 有没有分配尖峰
 
@@ -226,17 +277,28 @@ draw call 与 primitive 数在两种分辨率下**完全一致**（同一批场�
 | `get_visible_rect().size`（2D 逻辑坐标） | 1920×1080 | 1920×1080 | 1280×720 |
 | `content_scale_mode` / `content_scale_size` | 1 (canvas_items) / 1920×1080 | 1 / 1920×1080 | 0 (disabled) / 1280×720 |
 
-事实：发布设置下 1280×720 窗口使用 `canvas_items` 拉伸（设计分辨率 1920×1080），引擎报告的根纹理尺寸是窗口的
-1/1.5（854×480）；把 stretch 关掉后立刻变回 1280×720。**因此“1280×720 窗口”的 3D 光栅化分辨率无法仅凭
-`get_texture()` 断言**（该值显然是按 canvas 缩放折算后的结果，与 `visible_rect` 不自洽）。
+事实（首次读数，12:5x）：发布设置下 1280×720 窗口使用 `canvas_items` 拉伸（设计分辨率 1920×1080），
+`get_texture().get_size()` 报告 854×480；把 stretch 关掉后立刻变回 1280×720。
 
-对性能结论的影响：可以忽略。同一相位在 854×480 报告值与 1920×1080 之间，GPU 帧时间 p95 只从 1.90 ms 降到 1.32 ms
-（约 1.44 倍），而像素量差 5.06 倍——**说明本作的帧成本由 draw call（270–583）与几何提交（10.5 万–16.2 万 primitive）
-主导，不是像素填充率主导**。即使真实光栅分辨率是窗口的 1280×720，按上述比例也与结论方向一致：
-两种配置都远在 60 FPS 预算之内。
+**决定性取证（13:03，`--mode=info` 扩展）：**`RenderingServer.force_draw()` 之后直接
+`root.get_texture().get_image()` 存盘，再读回图像实际像素：
 
-对画质的影响：留待人工判定。已在团队内提示 art/QA 在 720p 截图取证时对比地砖纹理与描边锐度，
-若确认为画质缺陷，按 T9 流程处理（不属于性能任务，也不在本次改动范围内）。
+| 窗口 | `presented_image_size`（API 报告） | 存盘 PNG 路径 | PNG 实际像素 |
+| --- | --- | --- | --- |
+| 1280×720 | 1280×720 | `.local/validation/probe_presented_1280x720.png` | **1280×720** |
+| 1280×720 + 关 stretch（对照） | 1280×720 | `.local/validation/probe_presented_1280x720_no_stretch.png` | **1280×720** |
+| 1920×1080 | 1920×1080 | `.local/validation/probe_presented_1920x1080.png` | **1920×1080** |
+
+**结论（结案：非缺陷）：真实呈现（帧缓冲）分辨率等于窗口尺寸，不存在“3D 被降采样再放大”的画质问题。**
+`get_texture().get_size()` 报出的 854×480 只是 `canvas_items` 模式下的**读取口径差异**——它与
+`get_visible_rect()`=1920×1080 一样是 canvas 缩放后的逻辑量，不是呈现尺寸。
+**判据（请所有后续用例遵守）：任何“渲染分辨率”断言必须以 PNG 实际像素为准，不得断言 `get_texture().get_size()`。**
+旁证：QA 在 L4 包验证中用 OS 级 `GetClientRect` + `ClientToScreen` 抓窗口**客户区**得到 **1280×720**，与本节 PNG 逐像素一致；
+而抓**整窗**（含标题栏/边框）得到 1296×759，正好等于 `window_get_size_with_decorations()`——这也解释了为什么"窗口截图"看起来比渲染区大。
+
+对性能结论的影响：既然两个分辨率都按窗口原生尺寸光栅化，1080p 与 720p 的 GPU 帧时间差
+（p95 1.90 ms vs 1.32 ms，像素量 2.25 倍而时间只差 1.44 倍）说明帧成本**部分**随像素增长，
+但主体仍由 draw call（270–583）与几何提交（10.5 万–16.2 万 primitive）决定，两种配置都远在 60 FPS 预算内。
 
 ## 10. 为什么不做优化（逐项排除）
 
@@ -261,32 +323,139 @@ draw call 与 primitive 数在两种分辨率下**完全一致**（同一批场�
    `shader_cache` 而在首启动变慢。**导出包性能未测**（T4/T10 范围）。
 2. **脚本 bot 输入**。bot 使用真实 `Input` 动作、真实 FSM/Hitbox/物理，但瞄准与走位由脚本决定，
    因此不等于人工操作下的帧分布，也不构成手感结论。
-3. **音频集成时点**：本轮采集（2026-10-23 12:46–12:51）与 art 的音频接线（`scripts/audio/actor_audio.gd` 12:48:21、
-   `audio_cues.gd` 12:49:41、`run_audio.gd` 12:51:58 → 12:52:08，`assets/audio` 的 27 个 wav 导入 12:50:56）
-   **在时间上交错**，因此这里的数字不代表音频全部接入后的最终状态。证据：`performance_probe_720p-capped60.log`
-   在 12:51 出现 `SCRIPT ERROR: Parse Error: Function "_set_ambience_cue()" not found in base self.`
-   （`res://scripts/audio/run_audio.gd:160`）——那是 art 正在改文件的中间态，该次运行等于**完全没有音频**；
-   其余三次运行的日志无该错误，但它们发生在新 wav 导入之前，同样不是最终内容。
-   **结论：音频接入后必须复测一次**（同一组命令，约 2.5 分钟）。这一点在文档里如实声明，不用这轮的 CPU/内存数字
-   去声称“包含 27 路音频并发”。
+3. **音频/VFX 集成时点**：首轮采集（12:46–12:51）与 art 的音频接线在时间上交错，`performance_probe_720p-capped60.log`
+   在 12:51 甚至出现 `SCRIPT ERROR: Parse Error: Function "_set_ambience_cue()" not found in base self.`
+   （`res://scripts/audio/run_audio.gd:160`，art 改文件的中间态），该次运行等于**完全没有音频**。
+   **已在 13:03–13:05 音频与 VFX 全部定稿后复测**（第 12 节），结论不变。
+   仍未覆盖的是“27 路音频**并发**”（实际同时发声数受 2 个 one-shot voice + 1 个环境床约束），
+   因此本文不声称“27 路并发”。
 4. **单局 1 轮**：性能运行每条件 1 局（约 52–58 s 墙钟，含 3 房 + Boss）。连续多局长时运行（soak）未做，
    长时间稳定性属于 QA/发布验证范围。
 5. **单一硬件**：仅本机 RTX 3050 / i7-12700F / 1920×1080 屏幕 / Windows。无其他 GPU、无 4K、无 144 Hz、
    无 macOS/Linux 数据。
 6. **播放器/暂停相位未单独采样**：祝福选择为暂停模态，本任务未把它计入性能相位。
-7. 第 9 节的“真实 3D 光栅分辨率”未由引擎 API 证明，仅给出可复核的原始读数；画质影响待人工判定。
+7. ~~第 9 节的“真实 3D 光栅分辨率”未由引擎 API 证明~~ → **已由 PNG 存盘取证结案（第 9 节），非缺陷**。
+8. **单次采样不足以判定性能回归**：同一份代码同一内容在同一天内 GPU p95 可相差 65%（第 12.3 节）。
+   因此“某次测量变差”不得直接当成回归结论，必须做**交替 A/B ≥2 次/组**。
 
-## 12. 原始产物清单
+## 12. 定稿复测与 shader A/B 归因（2026-10-23 13:03–13:17）
+
+这一节回答两个问题：**①音频/VFX 全部接入后还达标吗？②某次测到的“GPU +50%”是 VFX 改动造成的吗？**
+
+### 12.1 定稿复测：两个分辨率都仍然达标
+
+同一台机器、同一批命令（`--fps=60`，完整三房 + Boss 真实输入战斗，1 局），音频 27 cue + 环境床、
+VFX（威胁脉冲/三段轨迹/火花/死亡冲击环）均已接入并已验证进入 framebuffer。单次约 58 s 墙钟。
+
+| 相位 | 1920×1080 平均 FPS / p50 / p95 / p99 / max (ms) | 1280×720 平均 FPS / p50 / p95 / p99 / max (ms) |
+| --- | --- | --- |
+| menu | 59.4 / 16.67 / 16.75 / 16.78 / 54.61 | 60.0 / 16.66 / 16.74 / 16.98 / 27.11 |
+| initial_transition | 45.9 / 16.66 / 17.59 / 179.96 / 179.96 | 47.0 / 16.69 / 17.72 / 169.10 / 169.10 |
+| room_1_combat | 59.2 / 16.75 / 17.92 / 27.97 / 49.89 | 59.2 / 16.69 / 17.29 / 27.44 / 49.27 |
+| room_1_traversal | 60.0 / 16.65 / 17.64 / 17.84 / 33.07 | 60.0 / 16.67 / 17.27 / 17.51 / 29.34 |
+| room_2_combat | 59.8 / 16.67 / 17.96 / 26.26 / 36.14 | 59.8 / 16.67 / 17.42 / 26.10 / 36.71 |
+| room_2_traversal | 60.0 / 16.66 / 17.33 / 17.64 / 31.87 | 60.0 / 16.67 / 17.13 / 17.54 / 34.44 |
+| boss_combat | 60.0 / 16.67 / 17.70 / 18.35 / 35.12 | 60.0 / 16.67 / 17.38 / 17.80 / 34.64 |
+
+`initial_transition` 的 170–180 ms 是**暖缓存**下的一次性首帧（冷缓存 3548 ms 见第 8.2 节），样本只有 26–28 帧，
+因此该相位的“平均 FPS 45.9”不是掉帧，而是把一次 180 ms 的首帧摊到 28 帧上。
+
+**draw call / primitives 判定（阈值：相对基线 +5% 报警）**
+
+| 指标 | 基线（VFX 前，12:50） | 定稿后（13:04） | 变化 | 判定 |
+| --- | --- | --- | --- | --- |
+| room_2_combat draw calls max / mean / p95 | 583 / 386 / 530 | 583 / 386.3 / 530 | 0% | 通过 |
+| room_2_combat primitives max / p95 | 161,655 / 156,456 | 161,671 / 156,456 | +0.01% / 0% | 通过 |
+| boss_combat draw calls max / mean / p95 | 462 / 381 / 434 | 464 / 379 / 434 | +0.4% | 通过 |
+| 节点 max / MEMORY_STATIC max / 显存 max | 309 / 105.9 MB / 195.0 MB | 310 / 107.8 MB / 195.2 MB | 噪声级 | 通过 |
+
+即 art 声明的“VFX 零新增 draw call”被独立实测证实（仅 +16 primitives，任何阈值下都是噪声）。
+
+### 12.2 判读说明：着色器片元成本与 draw call 数量无关
+
+上表“draw call 完全不变”**不能**推出“VFX 没有成本”——两者的开销维度不同：
+
+- **draw call / primitive** 由节点与材质数量决定，与分辨率无关；VFX 复用既有节点与 fragment 池，所以这些数字不动；
+- **着色器片元（ALU/带宽）成本**由“像素数 × 每像素指令数 × 受影响的屏幕面积”决定，**完全不体现在 draw call 上**，
+  且随分辨率增长。
+
+所以判断“某个美术/着色器改动是否带来帧成本”，**必须看 GPU 帧时间（`viewport_get_measured_render_time_gpu`），
+且必须做交替 A/B**，不能看 draw call，也不能拿两次不同会话的测量相减。
+
+### 12.3 GPU p95 的会话方差：我先前的“+50%”结论撤回
+
+`room_2_combat` 相位、1080p、上限 60，同一天 6 次测量（**代码内容并不相同的时间点**，但 A1/A2 与 13:04 用的是同一份 shader）：
+
+| 时间 | 运行 | GPU p95 (ms) | 备注 |
+| --- | --- | --- | --- |
+| 12:50 | 基线（VFX 前） | 2.38 | |
+| 13:04 | 定稿后首测 | **3.95** | 我当时据此报告“+50%” |
+| 13:15 | A/B · A1（出货版 shader） | 3.01 | |
+| 13:16 | A/B · A2（出货版 shader） | **2.39** | 同一 shader，比 13:04 低 40% |
+| 13:16 | A/B · B1（删 threat ALU） | 2.59 | |
+| 13:17 | A/B · B2（删 threat ALU） | 2.27 | |
+
+**同一份 shader 在 13:04 测 3.95 ms、在 13:16 测 2.39 ms，相差 65%。**
+因此 13:04 那次“+50%”**是会话级方差（GPU 时钟/热状态/后台残留），不是 VFX 或音频改动造成的**，
+该结论已在团队内撤回，不应写进任何缺陷/回归记录。
+
+### 12.4 shader A/B（隔离实验）：threat ALU 的成本测不出来
+
+为回答“art 在 `cel_surface.gdshader` 里新增的 threat 段是否值 ~1.4 ms”，做了**交替 A/B**（A,B,A,B 以抵消漂移）：
+
+- **A 组** = 出货版 shader；**B 组** = 同一文件仅把 `fragment()` 里的 threat ALU 去掉
+  （`ALBEDO = base_color.rgb`、`EMISSION = glow_color.rgb * glow_energy`），**但保留 `threat_pulse` 等 uniform 声明**——
+  这样 `actor_presentation.gd` 的 `set_instance_shader_parameter(&"threat_pulse", …)` 仍然解析成功，
+  不会引入“参数不存在”的报错噪声。**两组之间只差那约 8 个标量 op。**
+- 1280×720 以外的变量全部固定：1080p、上限 60、`--stop-after-room=2`（只测到 room_2_combat 结束，单次约 25 s）。
+- 变体与脚本保留在 `.local/ab/`：`cel_surface.current.gdshader`、`cel_surface.nothreat.gdshader`、`run_ab.ps1`。
+
+| 组 | GPU p95 (ms) | 组内波动 | 平均 FPS | 帧时间 p95 (ms) | draw calls p95 |
+| --- | --- | --- | --- | --- | --- |
+| A（出货版） | 3.01 / 2.39（均值 2.70） | 26% | 59.81 / 59.82 | 17.53 / 17.45 | 530 |
+| B（删 threat ALU） | 2.59 / 2.27（均值 2.43） | 14% | 59.83 / 59.81 | 17.65 / 17.54 | 530 |
+
+**判定：组间差（均值 +11%、最好比最好 +5%、最差比最差 +16%）小于 A 组自身的组内波动（26%），
+且两组帧时间 p95 与 FPS 完全无差 → 归因不成立，测不出实际差异 → 不做修复。**
+
+据此也挡掉了一次“为了证明有改善而去优化测不出来的东西”的改动（原提议：把 threat 段包进
+`if (threat_strength > 0.0)` 分支或拆出专用材质变体），在冻结前判定为**收益不可测、风险不为零，不做**。
+
+顺带纠正一个曾经被采纳的错误前提：`git show 65c88c1:godot/assets/materials/cel_surface.gdshader`
+**已经包含 threat ALU**（`65c88c1 → HEAD` 对该文件只差一行 `hint_range` 注解），
+拿它当“改动前版本”做 A/B 等于比两个成本相同的着色器，只会把真实差异误判成方差——**所以本实验改用了上面的隔离变体法**。
+
+### 12.5 实验后恢复自证
+
+实验结束后 `cel_surface.gdshader` 已恢复为出货版：
+
+```
+sha256           = C8856E15A703AFA3B0C809F87D6ACE4E99FD4A689D62C6D363DE77A553BADA27
+git hash-object  = 745effff690b16deb710a167ebf0322d63fb8062
+HEAD:...gdshader = 745effff690b16deb710a167ebf0322d63fb8062   （一致）
+git status --short godot/assets/materials/ → 空
+git diff --stat godot/assets/materials/cel_surface.gdshader → 空
+```
+
+## 13. 原始产物清单
 
 均在 `StarAbyss/.local/validation/`（不提交版本库）：
 
 | 文件 | 内容 |
 | --- | --- |
 | `performance_1080p-run1.json` / `.output.txt` / `performance_1080p_run1.log` | 命令 A：既有套件基准，1080p 不限帧，12 checks / 0 failures |
-| `performance_probe_1080p-capped60.json` / `.log` / `.stdout.txt` | 命令 B：1080p 上限 60 |
-| `performance_probe_720p-capped60.json` / `.log` / `.stdout.txt` | 命令 C：720p 上限 60 |
+| `performance_probe_1080p-capped60.json` / `.log` / `.stdout.txt` | 命令 B：1080p 上限 60（首轮） |
+| `performance_probe_720p-capped60.json` / `.log` / `.stdout.txt` | 命令 C：720p 上限 60（首轮） |
 | `performance_probe_720p-uncapped.json` / `.log` | 命令 D：720p 不限帧 |
-| `probe_info_1280x720.txt` / `probe_info_1920x1080.txt` | 命令 E：窗口/视口/纹理尺寸原始读数 |
+| `probe_info_1280x720.txt` / `probe_info_1920x1080.txt` | 命令 E：窗口/视口/纹理/呈现尺寸原始读数（JSON 全文） |
+| `probe_presented_1280x720.png` / `probe_presented_1920x1080.png` | 命令 E 存下的**真实呈现帧**（用于第 9 节尺寸取证） |
+| `probe_presented_1280x720_no_stretch.png` | 命令 E 的 stretch 关闭对照图 |
+| `performance_probe_1080p-capped60-postfx.json` / `.log` | 第 12.1 节：VFX+音频定稿后 1080p 复测 |
+| `performance_probe_720p-capped60-postfx.json` / `.log` | 第 12.1 节：VFX+音频定稿后 720p 复测 |
+| `performance_probe_ab-A1-current.json` / `ab-A2-current.json` | 第 12.4 节 A 组（出货版 shader） |
+| `performance_probe_ab-B1-nothreat.json` / `ab-B2-nothreat.json` | 第 12.4 节 B 组（删 threat ALU） |
+| `ab_summary.txt` / `ab-*.log` / `ab-*.stdout.txt` | A/B 四次的运行输出与引擎日志 |
+| `.local/ab/cel_surface.current.gdshader`、`cel_surface.nothreat.gdshader`、`run_ab.ps1` | A/B 两个变体与可复跑脚本（不提交版本库，便于复核） |
 
 复现建议：以上命令必须**独占桌面窗口**，采集期间不要移动鼠标或点击窗口（注入的鼠标事件会被原生位移污染）；
 同时不要与其它引擎进程并行运行（共用 `.godot` 缓存会导致引擎崩溃）。

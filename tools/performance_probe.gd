@@ -25,6 +25,9 @@ var _probe_rows: Dictionary[String, Array] = {}
 var _probe_cooldown: int = 0
 var _probe_mode: String = "run"
 var _probe_stretch_disabled: bool = false
+## 0 = run the whole flow. 2 = stop right after room_2_combat is measured, which is
+## what an A/B on a single phase needs (same code path, shorter wall clock).
+var _probe_stop_room: int = 0
 
 
 func _process(delta: float) -> bool:
@@ -73,6 +76,8 @@ func _test() -> void:
 			_probe_mode = argument.trim_prefix("--mode=").validate_filename()
 		elif argument.begins_with("--stretch="):
 			_probe_stretch_disabled = argument.trim_prefix("--stretch=") == "off"
+		elif argument.begins_with("--stop-after-room="):
+			_probe_stop_room = maxi(0, argument.trim_prefix("--stop-after-room=").to_int())
 	if DisplayServer.get_name() == "headless" or not RenderingServer.is_render_loop_enabled():
 		push_error("Performance probe requires a graphical desktop and continuous rendering")
 		quit(2)
@@ -131,6 +136,9 @@ func _test() -> void:
 		await _walk_to_exit(0)
 		_set_phase("room_2_combat")
 		await _fight(2)
+		if _probe_stop_room == 2:
+			_phase = "modal"
+			break
 		_phase = "modal"
 		await _click_card("blessing_flame")
 		_set_phase("room_2_traversal")

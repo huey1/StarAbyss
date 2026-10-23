@@ -13,7 +13,14 @@
 | L1 headless | 规则、数值、状态机、AI 行为、流程、音频资源、VFX 资源。无窗口，`--headless`，可控且快 | `py tools\verify.py --headless-only` | 窗口、Forward+ 渲染、真实鼠标、注入输入的完整局 |
 | L2 图形 | 真实窗口 + Forward+ 渲染 + 注入键鼠 + 真实物理步进，含三房通关闭环 | `py tools\verify.py` | 发布包本身（跑的是工程源码） |
 | L3 打包数据 | 两层互补：`pack_audit.gd` 证明**清单完整**（27 音频 cue 可解码、7 场景、7 GLB、无测试泄漏、主场景设置正确，75 项）；`export-smoke` 证明**真的能玩起来**（无测试源码、主菜单真实点击、骨骼/武器加载、移动/技能输入、暂停、重开、返回菜单，15 项） | `& $G --headless --main-pack <你的.pck> --script D:\game\StarAbyss\tools\pack_audit.gd --audio-driver Dummy`（零窗口）<br>`py tools\verify.py --packed <你的.pck> --only export-smoke`（图形） | 真实 exe 的原生输入（官方 release 模板禁止脚本注入）。怀疑包坏时先跑 `tools/pack_diagnose.gd` 看 `project.binary` 的 magic 与长度。**`pack_audit` 不解析 GDScript，不能替代 `export-smoke`**：曾出现"审计 75/75 通过、但包内 `actor_presentation.gd` 是半保存的版本（Parse Error）、玩家表现层全坏"的中间包，只有 `export-smoke` 能抓到。**两件都必须跑才算验完包。** |
-| L4 发布 exe 原生输入 | 真实 `StarAbyss.exe` 在 OS 级注入（Win32 鼠标/键盘）下场景确实响应 | 见 `.local/validation/native_input_*.png` 与报告 | 完整闭环（该层只做画面差异佐证，闭环由 L2+L3 覆盖） |
+| L4 发布 exe 原生输入 | 真实 `StarAbyss.exe`（**cwd = 包目录，exe 与 pck 必须同目录**，`embed_pck=false`）在 **OS 级注入**（Win32 `keybd_event`/`mouse_event`）下画面确实响应；同时记录进程启动→窗口句柄→首个可识别画面的耗时与退出码 | `powershell -NoProfile -ExecutionPolicy Bypass -File .local\validation\native_input_check.ps1 -Exe '<包目录>\StarAbyss.exe'` | 完整闭环与手感。该层只提供"**OS 级注入输入 + 画面差异佐证**"，闭环由 L2+L3 覆盖；`human_playtest_verified` 恒为 `false` |
+
+**触发条件（AGENTS.md 要求，必须遵守）**：凡改动**渲染 / 着色器 / 材质 / VFX / 光照 / UI 布局**，除 L1 headless 外**必须**再跑图形环境检查（`py tools\verify.py`），因为 headless 完全不执行 Forward+ 渲染管线，测不到着色器编译失败、黑屏、纯色、透明异常。P7 的 VFX 与材质类改动均已按此加跑图形验证：`vfx-rendering` 22 项、`art-rendering` 97 项（含真实帧截图），并额外用 `tools/screenshot_check.py` 做像素统计排除"截图存在但画面空白"。
+
+**L4 抓图的三条硬性要求**（踩过的坑，写脚本时照抄）：
+1. **先确认窗口在前台**：`ShowWindow(SW_RESTORE)` + `SetForegroundWindow` + 断言 `GetForegroundWindow()==hwnd`。`CopyFromScreen` 抓的是屏幕上那块矩形，**谁在最上层就抓谁**——若被别的窗口盖住，注入的键鼠也会发错对象，结论完全失真。
+2. **抓客户区**（`GetClientRect` + `ClientToScreen`），不要抓整窗：避免标题栏/边框，也避免抓到边框外覆盖的窗口。
+3. **每张图都要自证是游戏画面**：`4 < mean_luma < 200` 且 `quantized_colours ≥ 24`。**白帧（lum≈244）和黑帧（lum≈0）都不算"已渲染"**——刚启动的 release exe 会先显示白色客户区数秒，过早采样会把"正常的点击"误判成"点击无效"。不满足就重采，不要当成"游戏不响应"。
 
 ### 2. 运行器与命令
 
@@ -55,10 +62,12 @@ $env:LOCALAPPDATA='D:\game\StarAbyss\.local\localappdata'
 6. 每阶段超时：普通 300 s、`import` 600 s、`full-run-integration` 与 `performance` 900 s。
 7. **打包相关运行还需 `TEMP`/`TMP`**：`verify.py` 只内置 `APPDATA`/`LOCALAPPDATA`；`--export-pack`、以及任何可能让引擎写临时文件的打包检查，请在外层把 `TEMP`/`TMP` 也指到 `.local\tmp`。否则引擎写 `%TEMP%\tmpproject.binary` 失败会把 **0 字节的 `project.binary`** 打进包（退出码仍为 0、体积也正常，极具欺骗性），装起来必崩。
 8. **不要在别人跑测试时保存脚本**：半保存/半完成的脚本会让正在运行的检查读到 `Parse Error` 并判红（实测 `actor_presentation.gd` 曾在一次图形全量中途被编辑，最后一项检查因此失败）。改完先用 `& $G --path godot --headless --check-only --script res://<file>.gd` 自查（exit 0 且无输出即可解析），再通知别人使用窗口。
+9. **PowerShell 5.1 会把原生命令的 stderr 当致命错误**：引擎只要往 stderr 打一行（连 `Failed to read the root certificate store.` 这种无害信息也算），在 `$ErrorActionPreference='Stop'` 下就会抛 `NativeCommandError` **直接终止整个脚本**（实测让一轮性能采样只跑完 1/4 且没写出 JSON）。采集脚本请把 `2>&1 | ForEach-Object { "$_" }` 归并输出，或临时把 `$ErrorActionPreference` 设为 `'Continue'`。写脚本前**先用 `[System.Management.Automation.Language.Parser]::ParseFile()` 静态查语法**，不必开窗口就能验。
+10. **窗口占用要有显式握手**：多 Agent 并发时，"我占了（从 HH:MM:SS 起 N 秒）"→"我放了"两条消息必须都发。曾发生过两个 Agent 在同一秒各自启动，导致双方读数都不可信（并且有人为腾窗口杀错了进程）。
 
 ### 4. 用例清单与当前结果
 
-**L1 headless（11 项，`--headless-only`）**
+**L1 headless（12 项，`--headless-only`；实测 501 断言、0 失败）**
 
 | 检查 | 断言数 | 覆盖 |
 | --- | --- | --- |
@@ -71,8 +80,9 @@ $env:LOCALAPPDATA='D:\game\StarAbyss\.local\localappdata'
 | room-flow | 40 | 2/3 哨兵生成、实体门、暂停冻结、跨房保留、重开 |
 | guardian-behavior | 44 | Boss 两招数值、预警、单次命中、轮换、胜负清理 |
 | art-headless | 96 | 蒙皮/骨骼/动作轨迹/材质/碰撞保留的静态与采样校验 |
-| audio-feedback | 见报告 | 音频资源格式/电平/循环，cue 表与 manifest 双向一致，运行时 cue 生命周期 |
-| vfx-headless | 见报告 | VFX 节点池、命中/死亡/预警表现、判定范围未变 |
+| audio-feedback | 138 | 27 个 cue 与 manifest 双向一致、格式/时长/峰值/端点、8s 环境音循环与接缝、运行时 cue 生命周期（P7 由 54 扩到 138） |
+| vfx-headless | 21 | VFX 节点池、命中/死亡/预警表现、判定范围未变 |
+| robustness | 39 | 失焦/恢复、连续重开、重复选卡、UI 契约（QA 新增，见下） |
 
 **L2 图形（9 项，不加 `--headless-only`）**：main-window（真实窗口启动）、art-rendering（Forward+ 真实帧 + 截图）、vfx-rendering、input-physics（WASD/跳跃/闪避/镜头 + 真实鼠标事件）、combat-integration、enemy-integration、room-integration（实际 Esc/卡片点击/走门）、full-run-integration（菜单点击→2哨兵→祝福→3哨兵→祝福→Boss 350HP→胜利/失败→重开/返回菜单，连续三局）、performance（帧时间/draw call 采样）。
 

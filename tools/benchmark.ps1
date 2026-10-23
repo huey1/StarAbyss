@@ -135,7 +135,10 @@ function Invoke-BenchmarkRun {
         }
     }
 
-    $benchmarkReportPath = Join-Path $benchmarkLogs "performance_$RunLabel.json"
+    # The shipped suite writes performance_<label>.json; the probe writes
+    # performance_probe_<label>.json (see the two scripts' report destinations).
+    $benchmarkReportName = if ($RunSuite -eq 'benchmark') { "performance_$RunLabel.json" } else { "performance_probe_$RunLabel.json" }
+    $benchmarkReportPath = Join-Path $benchmarkLogs $benchmarkReportName
     if (-not (Test-Path -LiteralPath $benchmarkReportPath)) { throw "Benchmark '$RunLabel' produced no JSON report (exit $benchmarkExit)" }
     $benchmarkReport = Get-Content -LiteralPath $benchmarkReportPath -Raw | ConvertFrom-Json
     $benchmarkReport | Add-Member -NotePropertyName 'process_peak_working_set_mb' -NotePropertyValue $benchmarkPeakWorkingSet -Force
