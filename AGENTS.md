@@ -11,3 +11,11 @@
 - 每个主要模块完成后导入检查；涉及物理/输入时运行 `tools/verify.ps1`，检查输出中解析、资源和运行错误。渲染相关修改还需图形环境检查。
 - 更新 README、docs/ARCHITECTURE.md 和 docs/TESTING.md，准确区分自动验证、人工验证及未验证事项。
 - 不使用伪代码、空方法或 TODO 代替核心功能。不自动下载引擎、插件、资产或执行来源不明脚本。
+
+## 环境与工具陷阱（2026-10-23 追加，均来自实际事故）
+
+- **中文 UTF-8 文件禁止用 shell 重写**。本仓库已两次发生：用 PowerShell 的 Set-Content / Out-File / Get-Content | ... 处理含中文的 .py / .md，会按 GBK 解码 UTF-8，导致文件损坏、换行被吞，且不可逆。修改含中文的文件一律用 read/edit/write 工具，或 Python 显式 encoding='utf-8' + 
+ewline='
+'；读取同理，Get-Content 打印中文会乱码，应改用 Python 读出或直接用 read 工具。
+- **Godot 进程不能写 D:\game 之外的路径**。导出前必须把 APPDATA、LOCALAPPDATA、TEMP、TMP 全部重定向到仓库内 .local/ 下的目录；否则导出会**静默产出 0 字节的 project.binary 且仍返回 exit 0**，看起来成功实则产物损坏。
+- 验证图形套件（	ools/verify.py 不带 --headless-only）对桌面焦点敏感：运行前确保没有其他 Agent 正在写测试文件，也不要让其他进程抢占前台，否则 mouse capture 断言会因环境原因失败。

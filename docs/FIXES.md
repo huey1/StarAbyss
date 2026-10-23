@@ -317,4 +317,55 @@ func _notification(what: int) -> void:
 
 **结论**：两者不矛盾——§10.4 只是声明"叙事工作不碰这一行"，真正授权改它的是 D1。但**读者会误解成"该行未变"**，故记在此处，由 Lead 订正 `STORY_BIBLE`（该文件属剧情策划写范围，我不越界修改）。
 
+### 10.7 M1（room_02 双许可）——**经评估不实施**，已完整回退
+
+**状态**：**未落地，未提交**。代码改动（`room_definition.gd` 导出字段、`room_controller.gd` 赋值、`room_02.tres` 的 `max_attackers = 2`、夹具机器人升级）已全部回退，`git status` 仅剩对已撤销探针文件的删除。L1 复跑 **13/13 checks，561 assertions，0 assertions failures**，与撤销前完全一致。
+
+#### 10.7.1 先说那条被误认为"该改"的断言
+
+`godot/tests/room_integration_test.gd:115`：
+
+```gdscript
+_check(_max_actions <= 1, "three-enemy room keeps at most one complete attack chain active")
+```
+
+`_max_actions` 由 `_fight()` 内的 `:144` 统计"同一帧处于 TELEGRAPH/ATTACK/RECOVER 的哨兵数"。**这是全库唯一一处限制"多敌同时出手"的不变量**（`enemy_behavior_test.gd:154` 的 `maximum_active == 1` 测的是 P3 夹具 `sentinel_arena.tscn`，不涉及房间数据）。它代表一条**刻意的设计决定**，不是一条顺手写下的测试细节：本作刻意不让多个敌人同时出手，保证玩家每次只需要应对一条攻击链。
+
+#### 10.7.2 为什么撤销（判断依据，不是"做不了"）
+
+M1 的立项理由是「哨兵房几乎无威胁：贪刀机器人两房合计只掉 10 HP，第 2 房没有难度台阶」。**这个推理被推翻了**：
+
+- `_boss_input()` / `_bot_input()` 这类夹具机器人是**逐帧完美**读预警后撤、距离过近立即闪避的**超人**：反应延迟为 0，永不失手。它零掉血只能证明"**操作完美时游戏是公平可解的**"——这是健康状态，不是缺陷。
+- 真人侧的数字在 `DIFFICULTY_DESIGN`／`balance_sim.py` 的模拟里：**新手档整局阵亡率 35.0%**，普通档 1.8%，高手档 0%。也就是说这游戏**对新手已经不软**。
+- 在此前提下再给第 2 房加一档难度，且本作**没有检查点、死亡即整局重来（5–8 分钟）**，收益（多一个难度台阶）远小于风险（新手体验恶化）。
+
+**结论：不是做不了，是判断不该在本期做。** 若下一版要重新论证，请直接从 §10.7.2 的"机器人零掉血 ≠ 难度不足"这一条开始，不要重复走一遍"零掉血 → 该加压"的推导。
+
+#### 10.7.3 实测数据（撤销前测得，仍然有效）
+
+撤销前用一次性探针（headless，玩家静止且无敌，纯观测 AI 出手节奏，60 s 窗口）测得 **room 1 串行节奏**：
+
+| 房间 | `max_attackers` | 60 s 内 TELEGRAPH 次数 | 相邻出手间隔 均值 / 中位 / p90 / 最小 / 最大 | 并发持证峰值 |
+| --- | --- | --- | --- | --- |
+| room_01（2 哨兵，未 opt-in） | 1 | 32 | **1.94 s / 1.95 s / 1.95 s / 1.92 s / 1.95 s** | 1 |
+
+**实测 1.94 s，而不是理论推算的 1.53 s**（1.28 s 动作 + 0.25 s 交接之外，还有追踪/转向/走位造成的空档）。这条数字对下一版仍然有用：任何"加压后间隔应为 0.89 s"的推算都必须用同样的探针实测复核，**不得直接采用推算值**。
+
+探针自身有一个 bug 需记录：它先用 `room_index = 1` 再调 `_advance_room()`，而 `_advance_room()` 会推进到 `room_index + 1`，所以标为 `room_02` 的那次测量实际打到了 **Boss 房**（0 条 TELEGRAPH）。正确做法是 `room_index = 0` 再推进一次。**该探针已删除**（`godot/tests/m1_tempo_probe.gd`），删除理由是它是为已撤销改动服务的死文件，留着会让人误以为 M1 做了一半。
+
+#### 10.7.4 下一版若要实施，完整方案与工时（避免重复论证）
+
+| 步骤 | 文件 | 具体改法 | 工时 |
+| --- | --- | --- | --- |
+| 1 | `godot/scripts/systems/room_definition.gd` | 新增 `@export_range(1, 4, 1) var max_attackers: int = 1`（**不要**改 `attack_coordinator.gd` 的默认导出值） | 0.1 h |
+| 2 | `godot/scripts/systems/room_controller.gd` | `_ready()` 内 `coordinator.max_attackers = definition.max_attackers`（数据驱动，禁止按房间名/索引判断） | 0.1 h |
+| 3 | `godot/resources/rooms/room_02.tres` | 追加 `max_attackers = 2`（只有该房间 opt-in） | 0.05 h |
+| 4 | `godot/tests/room_integration_test.gd` | 机器人升级：`_bot_input()` 补"见预警后撤"分支（照抄 `_boss_input()` 的 danger 写法）；**必须在文档里写明"夹具机器人由纯贪刀升级为会读预警后撤的合格玩家"，不得假装它仍在测更严格的场景** | 0.5 h |
+| 5 | `godot/tests/room_integration_test.gd:115` | 冲突处理：**保留** `_max_actions <= 1` 但改为只观测房 1；房 2 新增 `max_attackers == 2` **且**"实测并发链数确实达到过 2"的两条断言 | 0.5 h |
+| 6 | 验证 | L1 全绿 + **L2 连续三轮全绿**；实测出手间隔用探针复测（见 §10.7.3） | 1–1.5 h |
+| — | 合计 | — | **≈ 2.3–2.8 h** |
+
+**回滚规则（本版已执行一次）**：L1 不全绿，或 L2 三轮中任何一轮失败，立即整包回退，**不得为保住改动去调断言或放宽条件**。
+
+
 

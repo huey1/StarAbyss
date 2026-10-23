@@ -5,7 +5,7 @@
 | 文档编号 | D2 / BALANCE_DESIGN **v2**（按 Lead + design-balance 复核意见修订） |
 | 基线 | Star Abyss v1.0.0（commit 3378b02） |
 | 负责人 | 数值策划（design-balance-v2） |
-| 配套文件 | `tools/balance_sim.py`（v2 模型）、`docs/balance_config.csv`、模拟输出 `.local/balance_sim_out.txt`（254 行，章节 [0]–[11]） |
+| 配套文件 | `tools/balance_sim.py`（v2 模型）、`docs/balance_config.csv`（88 行）、模拟输出 `.local/balance_sim_out.txt`（257 行，章节 [0]–[11]） |
 | 复现命令 | `cd D:\game\StarAbyss && & 'C:\Users\hongxinyu\AppData\Local\Programs\Python\Launcher\py.exe' tools\balance_sim.py` |
 | 确定性 | `SEED=20261023  TRIALS=400  DT=0.02s`，同机同版本重复运行输出完全一致；单次运行约 50s |
 | 本版性质 | 数值**盘点 + 诊断 + 下一版提案**。本期不改任何 `.tres`/代码/测试；§5 全部内容标记为「下一版提案」 |
@@ -482,7 +482,7 @@ cd D:\game\StarAbyss
 ```
 
 - 脚本：`tools/balance_sim.py`（v2；Python3 标准库；固定种子；GBK 安全——中文报告写文件不 print）
-- 输出：`.local/balance_sim_out.txt`（UTF-8，254 行，章节 [0]–[11]：[0] 输入 · [1] 哨兵TTK · [2] BossTTK · [3] 整局 · [4] 祝福边际 · [5] 分房压力 · [6] 玩家水平 · [7] 关键数字 · [8] 结论 · [9] 候选方案 · [10] Boss 口径 A/B · [11] 出手次数分布）
+- 输出：`.local/balance_sim_out.txt`（UTF-8，257 行，章节 [0]–[11]：[0] 输入 · [1] 哨兵TTK · [2] BossTTK · [3] 整局 · [4] 祝福边际 · [5] 分房压力 · [6] 玩家水平 · [7] 关键数字 · [8] 结论 · [9] 候选方案 · [10] Boss 口径 A/B · [11] 出手次数分布）
 - **两个显式口径入口**：`boss_uptime`（Boss 房输出利用率，`None` = 沿用玩家档）与 `_calibrate_boss_uptime(target)`（按实测 Boss 时长反解利用率）——不必再猜"利用率是多少"，也不再让它隐含在策略里
 - 配置表：`docs/balance_config.csv`（列 `key,current,proposed,unit,source_file,locked_by_test,rationale`）
 - 脚本内置 C0–C6 的 `override` 机制：在 `candidates` 列表加一行即可复算任何新提案，无需改模拟逻辑
