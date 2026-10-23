@@ -290,3 +290,31 @@ func _notification(what: int) -> void:
 1. **退出时 2 个 `AudioStreamWAV`/`AudioStreamPlaybackWAV` 泄漏**：夹具结束时伤害音效仍在播放。用 `create_timer(0.25)` 等待**无效**——`--fixed-fps 60` 下模拟 0.25 s 只需几毫秒真实时间（与 DEF-03 同源）。改为**墙钟** `Time.get_ticks_msec()` 等待 250 ms，并在 teardown 先调 `RunAudio.stop_all()`。现输出无 `leaked` 警告。
 2. **编辑中间态污染总闸门**：我先用多次 `edit` 追加断言，Lead 在中间态采样到 `Parse Error: Too many arguments for "find_child()"` 而红了一次（OBS-01 同类）。**此后夹具一律整文件 `write` 一次落盘，落盘后先单跑确认可解析再报。**
 
+### 10.5 I-4 叙事文本落地（STORY_BIBLE §10.0：9 条字符串 + 1 项小改）
+
+**结果**：L1 `13/13 checks，561 assertions，0 failures`；`design-landing` 夹具 `60 checks, 0 failures`（本项新增 19 条断言）。
+
+| # | 文件:行（基线→现） | 现字符串 → 新字符串 | 设计条目 | 断言 |
+| --- | --- | --- | --- | --- |
+| 1 | `main_menu.gd:45` | `深入遗迹，收集祝福，挑战晶核守卫。` → `黎明之前，重封晶核；孤身入渊，与旧誓一战。` | §10.0-1 / P0-1 | `I-4 P0-1 the main menu ships the narrative tagline`；`…old menu tagline is gone`；`…menu buttons are untouched` |
+| 2 | `run_ui.gd:243`（现位于 `_failed_cause_text()` 的 `closing`） | `本次试炼结束 · 重新开始将清空生命、祝福与房间进度` → `黎明未至 · 再入星渊，皆从头。` | §10.0-2 / P0-2 | `I-4 P0-2 the failure subtitle opens with the narrative line`；`…keeps the G-07 cause line (no information lost)` |
+| 3 | `run_ui.gd:231` | `试炼胜利 · 你击败了晶核守卫，暂时平息了遗迹的侵蚀` → `结界在黎明时分平息了遗迹的侵蚀。` | §10.0-3 / P0-3 | `I-4 P0-3 the victory subtitle uses the narrative line`（真实击杀 Boss 后读文案） |
+| 4 | `run_ui.gd:287`（`if`） | `晶核已稳定 · 试炼胜利` → `晶核已稳定 · 黎明已至` | §10.0-4 / P0-4 | `I-4 P0-4 the cleared boss objective uses the dawn line` |
+| 5 | `run_ui.gd:287`（`else`） | `击败晶核守卫 · 留意扇形与圆形预警` → `直面晶核守卫 · 留意扇形与圆形预警` | §10.0-5 / P0-5 | `I-4 P0-5 the boss objective keeps the telegraph warning` |
+| 6 | `room_controller.gd:39` | `晶核封印 · 击败晶核守卫` → `晶核封印 · 旧誓仍守此门` | §10.0-6 / P0-6 | `I-4 P0-6 the boss gate caption uses the narrative line` |
+| 7 | `room_controller.gd:77` | `晶核已稳定 · 试炼完成` → `晶核已稳定 · 黎明已至` | §10.0-7 / P0-7 | `I-4 P0-7 the cleared boss gate caption uses the dawn line` |
+| 8 | `blessing_flame.tres:8` | `三段剑击均生效。` → `星辉附刃，三段同辉。`（数值行未动） | §10.3 P1-1 | `I-4 P1-1 … keeps × 1.20 and gains the flavour line`；`…the flame multiplier is untouched` |
+| 9 | `blessing_wind.tres:8` | `距离与无敌区间不变。` → `距离与无敌区间不变，步借渊风。` | §10.3 P1-2 | `I-4 P1-2 … keeps every mechanic and gains the flavour clause`；`…the wind cooldown is untouched` |
+| 10 | `sentinel_controller.gd:5-19,48-50` | 新增 `const STATE_LABELS`（巡守/寻敌/蓄势/出击/收势/归位/受创/已毁），`status_label.text` 用映射值；**`enemy_brain.get_state_name()` 一字未改** | §10.6-1（Lead L4 批准） | `I-4 L4 the sentinel status label shows a Chinese state word (遗迹哨兵 / 45 / 45 · 寻敌)`；`…no longer leaks the English FSM word`；`…get_state_name() still returns the English contract value (Chase)` |
+
+**未做的 4 条（按裁定，不是遗漏）**：§10.3 的 P1-3（`blessing_vitality` 保持原样，信息量饱和）、P1-4/P1-5（P4 夹具行，非玩家可见）、§10.4 的 P2 与「明确不改」11 处全部保持原文。
+**「保持原文」的 6 处已逐一核对未被误改**：`run_ui.gd` 的 `STAR ABYSS / 遗迹探索者`、Boss 名 `晶核守卫`、失败标题 `探索者已倒下`、胜利标题 `晶核已稳定`、`default_guardian.tres:7`、`_objective` 的 `存活哨兵 %d / %d`（断言 `I-3 ONB-2 … keeps its frozen text` 每次都在复核它）。
+
+### 10.6 交叉核对：`STORY_BIBLE §10.4` 与 ONB-1 的表述冲突（文档层面，非代码问题）
+
+`STORY_BIBLE §10.4` 把 `run_ui.gd:102` 的底部操作行列进「不改」，理由是"操作指引，且 D1 可能要在该区新增新手引导，避免抢位"。
+事实上该行**已被 D1 的 ONB-1 改过**（`GAMEPLAY_DESIGN §4.4`：补全为 `WASD 移动 · 左键剑击 · E 星刃斩 · Shift 闪避 · Space 跳跃 · 鼠标转镜头`），且本项断言持续守护它（`I-3 ONB-1 the control row lists E 星刃斩 and Shift 闪避`）。
+
+**结论**：两者不矛盾——§10.4 只是声明"叙事工作不碰这一行"，真正授权改它的是 D1。但**读者会误解成"该行未变"**，故记在此处，由 Lead 订正 `STORY_BIBLE`（该文件属剧情策划写范围，我不越界修改）。
+
+

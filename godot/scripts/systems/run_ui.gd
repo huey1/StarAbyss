@@ -228,7 +228,7 @@ func _on_state_changed(state: RunManager.State) -> void:
 			_restart.grab_focus()
 		RunManager.State.WON:
 			_title.text = "晶核已稳定"
-			_subtitle.text = "试炼胜利 · 你击败了晶核守卫，暂时平息了遗迹的侵蚀"
+			_subtitle.text = "结界在黎明时分平息了遗迹的侵蚀。"
 			_restart.grab_focus()
 	_on_progress_changed()
 
@@ -240,7 +240,7 @@ func _failed_cause_text() -> String:
 	var progress: String = "倒在第 %d 房 / 共 %d 房 · 剩余生命 %d / %d" % [
 		_run.room_index + 1, _run.rooms.size(),
 		_run.player.health.current_health, _run.player.health.max_health]
-	var closing: String = "本次试炼结束 · 重新开始将清空生命、祝福与房间进度"
+	var closing: String = "黎明未至 · 再入星渊，皆从头。"
 	if _run.last_hit_summary.is_empty():
 		return "%s\n%s" % [closing, progress]
 	return "%s\n最后一击：%s\n%s" % [closing, _run.last_hit_summary, progress]
@@ -284,7 +284,7 @@ func _on_progress_changed() -> void:
 	_room.text = "%02d / 03    %s" % [_run.room_index + 1, _run.rooms[_run.room_index].display_name]
 	_boss_panel.visible = _run.room.definition.boss_room
 	if _run.room.definition.boss_room:
-		_objective.text = "晶核已稳定 · 试炼胜利" if _run.room.is_cleared else "击败晶核守卫 · 留意扇形与圆形预警"
+		_objective.text = "晶核已稳定 · 黎明已至" if _run.room.is_cleared else "直面晶核守卫 · 留意扇形与圆形预警"
 	elif _run.room.definition.boss_staging:
 		_objective.text = "晶核封印 · 普通试炼完成"
 	elif _run.room.is_cleared:

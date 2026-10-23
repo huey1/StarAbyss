@@ -28,6 +28,8 @@ v2 相对 v1 的三处关键修正（全部由源码/断言核实，v1 因此高
   5) 分房压力分解（出手次数 / 受击概率 / 闪避成功率 / 普攻打断次数）
   6) 玩家水平敏感性（含由真实机器人日志反推的参考档）
   7) 参数调整候选方案 C0–C6 的整局实测
+  8) Boss 战时长口径 A（贴脸流 17.9s）/ B（后撤流 28.7–35.1s）并列——Boss 时长是全文最敏感口径
+  9) 每 trial 的 Boss 出手次数分布（min/p25/median/p75/max），区分『长局堆积致死』与『策略性死亡』
 
 全部输入数值来源（已核实的资源文件、测试断言、源码行号）：
   godot/resources/combat/attack_01.tres       damage=12 duration=0.48 hit[0.16,0.28)
@@ -44,7 +46,7 @@ v2 相对 v1 的三处关键修正（全部由源码/断言核实，v1 因此高
   玩家 HP=100（combat_rules_test:62 回血封顶断言）
   烈焰之刃 ×1.20 逐段 roundi → 14/19/29（blessing_rules_test:34 断言）
   真实机器人对照日志：.local/validation/full-run-integration.output.txt
-      房1 6.43s HP 100→90；房2 9.08s HP 90→80（中途生命共鸣回满）；Boss 35.05s HP 全程不变
+      房1 6.43s HP 100→90；房2 9.08s HP 90→80（中途生命共鸣回满）；Boss 28.68–35.05s HP 全程不变
 
 模型假设（文档中逐条标注为「模型假设」；影响结论的给出敏感性表）：
   A1  玩家贴身近战，攻击判定必然命中当前目标（不含位移/角度误差）。
@@ -59,6 +61,7 @@ v2 相对 v1 的三处关键修正（全部由源码/断言核实，v1 因此高
   A9  哨兵彼此不叠加出手（F1），出手者按「存活敌人轮转」选择。
   A10 Boss 交替横扫/冲击，招式结束后等待 U(gap_min, gap_max) 再起手。
   A11 玩家输出利用率 uptime 表示额外的人为失误损失（已含 A5 的闪避空转之外的部分）。
+  A12 Boss 房时长由「输出利用率」显式决定（口径 A/B 见 BOSS_TIME_TARGETS），不隐含在策略里。
 """
 
 import contextlib
@@ -145,14 +148,13 @@ PROFILE_ORDER = ["expert", "average", "novice", "botlog"]
 # Boss 房输出利用率口径（Boss 战时长是全文最敏感的口径，必须显式指定，不能隐含在策略里）
 #   口径 A「贴脸流」：沿用玩家档自带利用率（普通 85%）→ Boss 战约 17.9s
 #   口径 B「后撤流」：机器人只要 Boss 进入 TELEGRAPH/ATTACK 就后撤再贴脸闪避
-#        （godot/tests/full_run_integration_test.gd:159-164），实测 28.68–35.05s。
-#        按理想 TTK 10.79s 反推利用率：10.79/35.05 = 30.8%、10.79/28.68 = 37.6%。
-BOSS_UPTIME_MODES = [
-    ("A 贴脸流（玩家档自带，普通=85%）", None),
-    ("B 后撤流·实测 35.05s（利用率 30.8%）", 0.308),
-    ("B 后撤流·实测 28.68s（利用率 37.6%）", 0.376),
+#        （godot/tests/full_run_integration_test.gd:159-164），实测帧数换算 28.68–35.05s。
+#        B 口径以「Boss 房时长对齐实测」为锚反解利用率（见 _calibrate_boss_uptime）。
+BOSS_TIME_TARGETS = [
+    ("B 后撤流·实测慢局", 35.05),
+    ("B 后撤流·实测快局", 28.68),
 ]
-IDEAL_BOSS_TTK = 10.790     # 含技能最优 Boss TTK，用于反推利用率
+IDEAL_BOSS_TTK = 10.790     # 含技能最优 Boss TTK，用于对照反推
 
 
 def roundi(value: float) -> int:
@@ -265,15 +267,19 @@ def _draw_dodge_error(rng, prof):
 
 
 def simulate_room(kind, count, entry_hp, flags, rng, profile=DEFAULT_PROFILE,
-                  dodge_enabled=True, time_cap=ROOM_TIME_CAP):
-    """模拟一个房间。flags = {"flame":bool,"vitality":bool,"wind":bool}。"""
+                  dodge_enabled=True, time_cap=ROOM_TIME_CAP, uptime_override=None):
+    """模拟一个房间。flags = {"flame":bool,"vitality":bool,"wind":bool}。
+
+    uptime_override：显式指定本房输出利用率（Boss 房「贴脸流 / 后撤流」两个口径用）；
+    None 表示沿用玩家档自带利用率。
+    """
     prof = PROFILES[profile]
     normal_mult = FLAME_MULT if flags.get("flame") else 1.0
     kill_heal = VITALITY_KILL_HEAL if flags.get("vitality") else 0.0
     dodge_cd = DODGE_CD_WIND if flags.get("wind") else DODGE["cd"]
     inv_start = DODGE["inv_start"]
     inv_end = WIND_INV_END if flags.get("wind") else DODGE["inv_end"]
-    uptime = prof["uptime"]
+    uptime = prof["uptime"] if uptime_override is None else uptime_override
     engage = ENGAGE[kind]
 
     hp = min(PLAYER_HP, entry_hp)
@@ -321,7 +327,7 @@ def simulate_room(kind, count, entry_hp, flags, rng, profile=DEFAULT_PROFILE,
 
         # --- B) 玩家命中结算（含打断） ---
         if p_pending is not None and t >= p_pending[0]:
-            hit_time, dmg, _src = p_pending
+            _hit_time, dmg, _src = p_pending
             p_pending = None
             tgt = current_target()
             if tgt is not None:
@@ -423,7 +429,7 @@ def simulate_room(kind, count, entry_hp, flags, rng, profile=DEFAULT_PROFILE,
     total_attacks = max(stat["attacks"], 1)
     return {
         "kind": kind, "count": count, "outcome": outcome, "time": t,
-        "hp_end": hp, "hp_lost": PLAYER_HP * 0 + max(0.0, min(PLAYER_HP, entry_hp) - hp),
+        "hp_end": hp, "hp_lost": max(0.0, min(PLAYER_HP, entry_hp) - hp),
         "flags": flags, "invuln_uptime": dodge_uptime(dodge_cd, inv_end),
         "dodge_cd": dodge_cd,
         "attacks": stat["attacks"], "taken": stat["taken"], "dodged": stat["dodged"],
@@ -464,14 +470,20 @@ def _flags(*names):
             "wind": "wind" in names}
 
 
-def simulate_run(bl1, bl2, trials=TRIALS, seed=SEED, profile=DEFAULT_PROFILE):
-    """整局模拟。bl1/bl2 为 None 或 blessing id（None 表示该次不选祝福，用于对照组）。"""
+def simulate_run(bl1, bl2, trials=TRIALS, seed=SEED, profile=DEFAULT_PROFILE,
+                 boss_uptime=None):
+    """整局模拟。bl1/bl2 为 None 或 blessing id（None 表示该次不选祝福，用于对照组）。
+
+    boss_uptime：Boss 房显式输出利用率口径（见 BOSS_TIME_TARGETS / _calibrate_boss_uptime）；
+    None = 沿用玩家档。返回里含 raw 明细（每 trial 的 Boss 出手次数），供分布统计使用。
+    """
     room_stats = {"r1": [], "r2": [], "boss": []}
     total_lost, total_time = [], []
     deaths = 0
     death_room = {"r1": 0, "r2": 0, "boss": 0}
     clear = 0
     boss_entry_hp = []
+    raw_boss_attacks, raw_boss_time, raw_boss_dead = [], [], []
 
     for trial in range(trials):
         rng = random.Random(seed * 7919 + trial)
@@ -503,13 +515,17 @@ def simulate_run(bl1, bl2, trials=TRIALS, seed=SEED, profile=DEFAULT_PROFILE):
         # Boss
         if not dead:
             boss_entry_hp.append(hp)
-            r = simulate_room("boss", 1, hp, _flags(bl1, bl2), rng, profile)
+            r = simulate_room("boss", 1, hp, _flags(bl1, bl2), rng, profile,
+                              uptime_override=boss_uptime)
             room_stats["boss"].append(r)
             tsum += r["time"]
             hp = r["hp_end"]
+            raw_boss_attacks.append(r["attacks"])
+            raw_boss_time.append(r["time"])
             if r["outcome"] == "death":
                 dead = True
                 death_room["boss"] += 1
+            raw_boss_dead.append(r["outcome"] == "death")
         total_lost.append(PLAYER_HP - hp)
         total_time.append(tsum)
         if dead:
@@ -534,15 +550,36 @@ def simulate_run(bl1, bl2, trials=TRIALS, seed=SEED, profile=DEFAULT_PROFILE):
         }
 
     return {
-        "bl1": bl1, "bl2": bl2, "profile": profile,
+        "bl1": bl1, "bl2": bl2, "profile": profile, "boss_uptime": boss_uptime,
         "run_hp_lost": mean(total_lost),
         "run_time": mean(total_time),
         "death_rate": deaths / trials,
+        "boss_death_rate": death_room["boss"] / trials,
         "clear_rate": clear / trials,
         "death_room": death_room,
         "boss_entry_hp": mean(boss_entry_hp),
         "r1": room_mean("r1"), "r2": room_mean("r2"), "boss": room_mean("boss"),
+        "raw": {"boss_attacks": raw_boss_attacks, "boss_time": raw_boss_time,
+                "boss_dead": raw_boss_dead},
     }
+
+
+def _calibrate_boss_uptime(target_time, trials=80, profile=DEFAULT_PROFILE):
+    """二分反解：使 Boss 房时长 ≈ target_time 所需的输出利用率。
+
+    实测锚点是「时长」（帧数可直接换算），不是利用率；直接拿理想 TTK 相除会低估，
+    因为闪避会取消出招、换位另占时间。利用率越大 → 时长越短。
+    """
+    lo, hi = 0.10, 0.90
+    for _ in range(7):
+        mid = (lo + hi) / 2.0
+        r = simulate_run(None, None, trials=trials, seed=SEED + 17, profile=profile,
+                         boss_uptime=mid)
+        if r["boss"]["time"] > target_time:
+            lo = mid          # 时长偏长 → 利用率太低
+        else:
+            hi = mid
+    return (lo + hi) / 2.0
 
 
 # ----------------------------------------------------------------------------
@@ -570,6 +607,12 @@ def override_constants(overrides):
             obj[leaf] = old
         for key, old in saved_globals:
             globals()[key] = old
+
+
+
+
+def _short(name):
+    return {"flame": "烈焰", "vitality": "生命", "wind": "疾风"}[name]
 
 
 # ----------------------------------------------------------------------------
@@ -624,7 +667,7 @@ def main() -> int:
           f"闪避误差σ {pr['dodge_err_sd']:.2f}s  闪避意图 {pr['dodge_intent'] * 100:.0f}%  "
           f"输出利用率 {pr['uptime'] * 100:.0f}%")
     w("  真实机器人对照（.local/validation/full-run-integration.output.txt，真实输入未开无敌）:")
-    w("    房1 6.43s HP 100→90；房2 9.08s HP 90→80（中途获得生命共鸣回满）；Boss 35.05s HP 全程不变")
+    w("    房1 6.43s HP 100→90；房2 9.08s HP 90→80（中途获得生命共鸣回满）；Boss 28.68–35.05s HP 全程不变")
     w("")
 
     # ---------------- [1] 单哨兵 TTK ----------------
@@ -946,6 +989,80 @@ def main() -> int:
           f"阵亡率 {r['death_rate'] * 100:>5.1f}%  耗时 {r['run_time']:>6.2f}s")
     w("")
 
+    # ---------------- [10] Boss 口径 A/B 并列 ----------------
+    w("[10] Boss 战时长口径 A/B 并列（Boss 房输出利用率是全文最敏感口径，必须显式给定）")
+    w("-" * 100)
+    w("  口径定义:")
+    w("    口径 A 贴脸流：玩家全程贴脸输出，沿用玩家档利用率（普通 85%）")
+    w("    口径 B 后撤流：机器人只要 Boss 进入 TELEGRAPH/ATTACK 就后撤再贴脸闪避")
+    w("      （godot/tests/full_run_integration_test.gd:159-164），实测帧数换算 28.68–35.05s。")
+    w("      B 口径以『Boss 房时长对齐实测』为锚，用 7 步二分反解所需输出利用率——")
+    w("      因为闪避取消出招另有输出损失，直接拿理想 TTK 相除会低估所需时长。")
+    w("  两种口径下『阵亡率』的两种定义（全文严格区分，不混用）:")
+    w("    阵亡率（整局）  = 任意一房阵亡的 trial 数 / 试验数")
+    w("    阵亡率（Boss房）= Boss 房阵亡的 trial 数 / 试验数")
+    w("")
+    w("  口径校准（普通玩家）:")
+    modes = [("A 贴脸流（玩家档自带，普通=85%）", None)]
+    for tlabel, target in BOSS_TIME_TARGETS:
+        up = _calibrate_boss_uptime(target)
+        modes.append((f"B 后撤流·对齐实测 {target:.2f}s（利用率 {up * 100:.1f}%）", up))
+        w(f"    {tlabel}：目标 Boss 房 {target:.2f}s → 反解输出利用率 {up * 100:.1f}%")
+    w("")
+    boss_modes = {}
+    w("  配置            口径                                     Boss时长 Boss出手 Boss房损失 整局损失 "
+      "阵亡率(整局) 阵亡率(Boss房)")
+    for mname, mup in modes:
+        for rlabel, b1, b2 in (("无祝福", None, None),
+                               ("烈焰→疾风", "flame", "wind"),
+                               ("生命→烈焰", "vitality", "flame")):
+            r = simulate_run(b1, b2, boss_uptime=mup)
+            boss_modes[(mname, rlabel)] = r
+            w(f"  {rlabel:<12} {mname:<42} {r['boss']['time']:>7.2f}s {r['boss']['attacks']:>8.2f} "
+              f"{r['boss']['hp_lost']:>9.2f} {r['run_hp_lost']:>8.2f} "
+              f"{r['death_rate'] * 100:>11.1f}% {r['boss_death_rate'] * 100:>13.1f}%")
+    w("")
+    w("  Boss 单次招式最大伤害 = 25（冲击）→ 出手 n 次的理论最大伤害 = 25n；玩家进 Boss 房平均 HP：")
+    for mname, _m in modes:
+        r = boss_modes[(mname, "无祝福")]
+        w(f"    {mname:<42} 进入 HP {r['boss_entry_hp']:.1f} → 理论可承受 "
+          f"{int(r['boss_entry_hp'] // 25)} 次冲击（不含闪避；实际因闪避大幅提高）")
+    w("")
+
+    # ---------------- [11] Boss 出手次数分布 ----------------
+    w("[11] 每 trial 的 Boss 出手次数分布（判断阵亡来自『长局』还是『策略性死亡』）")
+    w("-" * 100)
+
+    def pctl(xs, q):
+        if not xs:
+            return 0.0
+        s = sorted(xs)
+        i = min(len(s) - 1, max(0, int(round(q * (len(s) - 1)))))
+        return float(s[i])
+
+    w("  配置            口径                          子集      n    min    p25  median    p75    max")
+    for mname, mup in modes[:2]:
+        for rlabel, b1, b2 in (("无祝福", None, None), ("生命→烈焰", "vitality", "flame")):
+            r = simulate_run(b1, b2, boss_uptime=mup)
+            atk = r["raw"]["boss_attacks"]
+            dead_flags = r["raw"]["boss_dead"]
+            alive = [a for a, d in zip(atk, dead_flags) if not d]
+            deadv = [a for a, d in zip(atk, dead_flags) if d]
+            for subset, xs in (("全部", atk), ("存活", alive), ("阵亡", deadv)):
+                if not xs:
+                    w(f"  {rlabel:<12} {mname:<28} {subset:<6} {0:>4}  （无样本）")
+                    continue
+                w(f"  {rlabel:<12} {mname:<28} {subset:<6} {len(xs):>4} "
+                  f"{min(xs):>5.0f} {pctl(xs, 0.25):>6.1f} {pctl(xs, 0.5):>6.1f} "
+                  f"{pctl(xs, 0.75):>6.1f} {max(xs):>6.0f}")
+    w("  注：出手次数 = 整场 Boss 战实际发起招式次数（含被闪避的招式），**右删失**——")
+    w("      阵亡会提前结束战斗，所以『阵亡』子集的出手次数只会 ≤ 该局若存活时的次数，")
+    w("      因此 median(阵亡) < median(存活) 不代表『死得快是因为敌人出手多』，")
+    w("      正确读法是：阵亡局是『输出太慢、还没打完就被打死』的长局（同口径下时长 ↑ 出手 ↑）。")
+    w("      A 口径下阵亡局 median 4.0 = 存活局 4.0 ⇒ 阵亡来自单次闪避失误（策略性死亡），")
+    w("      而非出手堆积；B 口径下阵亡局的绝对出手数（median 7）已远高于 A 口径的全部区间。")
+    w("")
+
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUT_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -965,11 +1082,12 @@ def main() -> int:
           f"wind {first_gain['wind']:.2f}%/{second_gain['wind']:.2f}%")
     print(f"botlog profile run hp lost = "
           f"{simulate_run(None, None, profile='botlog')['run_hp_lost']:.2f}")
+    for mname, _mup in modes:
+        r = boss_modes[(mname, "无祝福")]
+        print(f"boss mode [uptime={r['boss_uptime']}] = {r['boss']['time']:.2f}s  "
+              f"attacks {r['boss']['attacks']:.2f}  "
+              f"death all/boss {r['death_rate'] * 100:.1f}% / {r['boss_death_rate'] * 100:.1f}%")
     return 0
-
-
-def _short(name):
-    return {"flame": "烈焰", "vitality": "生命", "wind": "疾风"}[name]
 
 
 if __name__ == "__main__":

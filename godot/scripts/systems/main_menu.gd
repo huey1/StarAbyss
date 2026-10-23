@@ -42,7 +42,7 @@ func _ready() -> void:
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	rows.add_child(spacer)
 	_label(rows, "星渊遗迹", 96, Color("e3eef4"))
-	_label(rows, "深入遗迹，收集祝福，挑战晶核守卫。", 28, Color("a5bccb"))
+	_label(rows, "黎明之前，重封晶核；孤身入渊，与旧誓一战。", 28, Color("a5bccb"))
 	_label(rows, "两间哨兵试炼  /  两次祝福选择  /  一场晶核决战", 21, Color("7196a9"))
 	var start: Button = _button(rows, "开始本局", start_game)
 	start.name = "StartRun"

@@ -1,12 +1,13 @@
 extends SceneTree
 ## P8 design-landing fixture (game-dev / D6).
 ##
-## Covers exactly the three batch-1 items of docs/DESIGN_REVIEW.md §3.1 and nothing else.
+## Covers exactly the four batch-1 items of docs/DESIGN_REVIEW.md §3.1 and nothing else.
 ## Every assertion here is NEW; no existing suite is modified, and no expectation of the
 ## frozen L1 assertions is touched.
 ##   I-1 perfect-dodge confirmation  -> GAMEPLAY_DESIGN §5.5 G-04A (SYSTEM_DESIGN §5.2)
 ##   I-2 failure attribution         -> GAMEPLAY_DESIGN §5.8 G-07
 ##   I-3 onboarding ONB-1..ONB-4     -> GAMEPLAY_DESIGN §4.4
+##   I-4 narrative text landing      -> STORY_BIBLE §10.0 (9 strings + sentinel state words)
 ##
 ## Direct HealthComponent calls are used so the fixture never depends on enemy AI timing.
 ## Registered in tools/verify.py as the headless check "design-landing".
@@ -22,12 +23,33 @@ func _initialize() -> void:
 
 
 func _test() -> void:
+	await _test_menu_tagline()
 	await _test_dodge_confirmation()
 	await _test_fail_attribution()
 	await _test_boss_attribution()
 	await _test_onboarding()
+	await _test_story_text()
 	print("DESIGN LANDING RESULT: %d checks, %d failures" % [_checks, _failures])
 	quit(0 if _failures == 0 else 1)
+
+
+# --- I-4 main menu tagline (STORY_BIBLE P0-1) -------------------------------
+
+func _test_menu_tagline() -> void:
+	var menu_path: String = String(ProjectSettings.get_setting("application/run/main_scene"))
+	var menu: Control = (load(menu_path) as PackedScene).instantiate() as Control
+	root.add_child(menu)
+	current_scene = menu
+	await _ticks(6)
+	_check(_has_label_containing(menu, "黎明之前，重封晶核；孤身入渊，与旧誓一战。"),
+		"I-4 P0-1 the main menu ships the narrative tagline")
+	_check(not _has_label_containing(menu, "深入遗迹，收集祝福"),
+		"I-4 P0-1 the old menu tagline is gone")
+	_check(_find_button(menu, "开始本局") != null and _find_button(menu, "退出游戏") != null,
+		"I-4 P0-1 the menu buttons are untouched by the text change")
+	menu.queue_free()
+	current_scene = null
+	await _ticks(4)
 
 
 # --- I-1 完美闪避确认 (G-04A) ------------------------------------------------
@@ -200,7 +222,82 @@ func _test_onboarding() -> void:
 	await _teardown()
 
 
+# --- I-4 narrative text landing (STORY_BIBLE §10.0) -------------------------
+
+func _test_story_text() -> void:
+	await _fresh()
+	var ui: RunUI = _run.ui
+	var subtitle: Label = ui.find_child("ModalSubtitle", true, false) as Label
+
+	# P0-2: failure subtitle.
+	_run.player.health.receive_damage(100, DamageInfo.create(10.0, _run.room.enemies[0], 2))
+	await _frames(4)
+	_check(subtitle != null and subtitle.text.begins_with("黎明未至 · 再入星渊，皆从头。"),
+		"I-4 P0-2 the failure subtitle opens with the narrative line")
+	_check(subtitle != null and subtitle.text.contains("最后一击："),
+		"I-4 P0-2 the narrative rewrite keeps the G-07 cause line (no information lost)")
+	await _teardown()
+
+	# P0-4 / P0-5 / P0-6 / P0-7: boss objective, boss gate caption, victory lines.
+	await _fresh()
+	var boss_ui: RunUI = _run.ui
+	var boss_objective: Label = boss_ui.find_child("ObjectiveText", true, false) as Label
+	var win_subtitle: Label = boss_ui.find_child("ModalSubtitle", true, false) as Label
+	_run.room_index = 1
+	_run._set_state(RunManager.State.TRANSITION)
+	_run._advance_room()
+	await _ticks(10)
+	_check(boss_objective != null and boss_objective.text == "直面晶核守卫 · 留意扇形与圆形预警",
+		"I-4 P0-5 the boss objective keeps the telegraph warning after the narrative rewrite")
+	_check(_run.room.gate.caption.text == "晶核封印 · 旧誓仍守此门",
+		"I-4 P0-6 the boss gate caption uses the narrative line")
+	var boss: SentinelController = _run.room.boss
+	_check(boss != null, "I-4 the boss room spawns the guardian before the victory-line check")
+	if boss != null:
+		boss.health.receive_damage(350, DamageInfo.create(350.0, _run.player, 1))
+		await _frames(8)
+		_check(_run.current_state == RunManager.State.WON, "I-4 the boss death still reaches the WON state")
+		_check(boss_objective.text == "晶核已稳定 · 黎明已至", "I-4 P0-4 the cleared boss objective uses the dawn line")
+		_check(win_subtitle != null and win_subtitle.text == "结界在黎明时分平息了遗迹的侵蚀。",
+			"I-4 P0-3 the victory subtitle uses the narrative line")
+		_check(_run.room.gate.caption.text == "晶核已稳定 · 黎明已至",
+			"I-4 P0-7 the cleared boss gate caption uses the dawn line")
+	await _teardown()
+
+	# P1-1 / P1-2: blessing descriptions keep every mechanic and add the flavour clause.
+	var flame: BlessingDefinition = load("res://resources/blessings/blessing_flame.tres") as BlessingDefinition
+	var wind: BlessingDefinition = load("res://resources/blessings/blessing_wind.tres") as BlessingDefinition
+	_check(flame != null and flame.description.contains("× 1.20") and flame.description.contains("星辉附刃"),
+		"I-4 P1-1 the flame blessing keeps × 1.20 and gains the flavour line")
+	_check(flame != null and is_equal_approx(flame.normal_attack_multiplier, 1.2),
+		"I-4 P1-1 the flame multiplier is untouched")
+	_check(wind != null and wind.description.contains("0.9 秒") and wind.description.contains("距离与无敌区间不变")
+		and wind.description.contains("步借渊风"),
+		"I-4 P1-2 the wind blessing keeps every mechanic and gains the flavour clause")
+	_check(wind != null and is_equal_approx(wind.dodge_cooldown, 0.9), "I-4 P1-2 the wind cooldown is untouched")
+
+	# §10.6 row 1: the floating state word above a sentinel is Chinese; the FSM contract is not.
+	await _fresh()
+	var sentinel: SentinelController = _run.room.enemies[0]
+	await _ticks(2)
+	var shown: String = sentinel.status_label.text
+	_check(_contains_any(shown, ["巡守", "寻敌", "蓄势", "出击", "收势", "归位", "受创", "已毁"]),
+		"I-4 L4 the sentinel status label shows a Chinese state word (%s)" % shown.replace("\n", " / "))
+	_check(not _contains_any(shown, ["Idle", "Chase", "Telegraph", "Attack", "Recover", "Return", "Hurt", "Dead"]),
+		"I-4 L4 the sentinel status label no longer leaks the English FSM word")
+	_check(_contains_any(sentinel.brain.get_state_name(), ["Idle", "Chase", "Telegraph", "Attack", "Recover", "Return", "Hurt", "Dead"]),
+		"I-4 L4 EnemyBrain.get_state_name() still returns the English contract value (%s)" % sentinel.brain.get_state_name())
+	await _teardown()
+
+
 # --- helpers ---------------------------------------------------------------
+
+func _contains_any(haystack: String, needles: Array) -> bool:
+	for needle: String in needles:
+		if haystack.contains(needle):
+			return true
+	return false
+
 
 func _has_label_containing(container: Node, needle: String) -> bool:
 	for node: Node in container.find_children("*", "Label", true, false):
@@ -208,6 +305,14 @@ func _has_label_containing(container: Node, needle: String) -> bool:
 		if label != null and label.text.contains(needle):
 			return true
 	return false
+
+
+func _find_button(container: Node, text: String) -> Button:
+	for node: Node in container.find_children("*", "Button", true, false):
+		var button: Button = node as Button
+		if button != null and button.text == text:
+			return button
+	return null
 
 
 func _on_blocked(_info: DamageInfo) -> void:
