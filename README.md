@@ -2,6 +2,17 @@
 
 Godot 4 第三人称 3D 动作 Roguelite 的 **P7 打磨发布工程**（发布版本 `1.0.0`）。探索者、遗迹哨兵、晶核守卫与遗迹环境已使用本项目 Blender 资产，接入骨骼动画、独立武器和 Godot Toon 材质。保留主菜单、三房战斗、祝福、胜负与重开闭环。策划基线为 [GDD v1.0](docs/Star_Abyss_GDD_v1.0.md)，进度见 [TASKS.md](docs/TASKS.md)。Windows x64 导出与发布流程见 [docs/BUILD_WINDOWS.md](docs/BUILD_WINDOWS.md)；美术观感与实体键鼠体验待人工验收。
 
+## 试玩包（无需安装 Godot）
+
+发布 zip：`builds\windows\star_abyss_1.0.0_windows_x64.zip`（40,913,090 B，sha256 `dd9dda5e…6ea6`）。
+
+1. **解压**到任意目录（不要在压缩包里直接双击运行）。
+2. 进入解压出的 `star_abyss_windows_x64/` 目录，双击 **`StarAbyss.exe`**。
+3. **`StarAbyss.exe` 与 `StarAbyss.pck 必须留在同一目录`**：游戏数据全在 pck 里，只复制 exe 会弹出 `ALERT!` 对话框且无法启动。
+4. 需要 Forward+（Vulkan）显卡；本版本未做代码签名，首次运行可能触发 SmartScreen 提示。
+
+游戏内容是否变化只看 `StarAbyss.pck` 的 sha256——`embed_pck=false` 时 `StarAbyss.exe` 就是官方 release 模板的逐字节复制，它的哈希只反映引擎版本。完整说明、校验方法与已知限制见 [docs/RELEASE.md](docs/RELEASE.md)。
+
 ## 启动
 
 已验证环境：Windows x64、Godot **4.7.2 stable**（`4.7.2.stable.official.ed1daf0bf`）、Forward+ / Vulkan、NVIDIA GeForce **RTX 3050**。使用 GDScript，无第三方插件、无全局单例，无外部美术资源依赖。其他 Godot 4.x 版本尚未验证。

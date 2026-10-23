@@ -147,9 +147,16 @@ py tools\build_windows.py --attest-native-input --verified-by "<谁>" --evidence
 ```
 
 **为什么背书要单独一条命令**：构建流水线**无法知道**包是否被真人或外部脚本验证过，所以它只写
-`release_native_input_verified: false`——这是诚实的。事后用 `--attest-native-input` 记录事实，且该命令会
-拒绝为 `release_candidate_eligible != true` 的包背书、并在改完后断言 `StarAbyss.exe`/`StarAbyss.pck`
-哈希未变（背书只允许改元数据，绝不允许改产物）。
+`release_native_input_verified: false`——这是诚实的。事后用 `--attest-native-input` 记录事实，且该命令有三重防护：
+
+1. 拒绝为 `release_candidate_eligible != true` 的包背书；
+2. **把背书钉死在具体构建上**：先核对当前 `StarAbyss.exe`/`StarAbyss.pck` 的哈希与包内 `BUILD_INFO.json`
+   记录的 `exe_sha256`/`pck_sha256` **一致**，不一致直接失败（否则可以把 pck 换成别的再"背书"）；
+3. 写完后**断言 exe/pck 哈希与背书前逐字节相同**，只允许改元数据。
+
+已做正负自测（2026-10-23）：
+- 完好副本 → `PASS`，`exe`/`pck` 哈希未变；
+- 把 pck 中间翻转一个字节后再背书 → `FAIL: StarAbyss.pck is a4e1795a… but BUILD_INFO.json records pck_sha256 32e8588b…: these artefacts are not the ones that were built and verified.`，退出码 1，且**真实发布包未被改动**。
 
 **`--clean` 的语义（重要，来自一次真实事故）**：它不会删除任何东西，而是把这 9 个自有产物**移动**到
 `.local/export-diagnostics/previous_build/<YYYYmmdd-HHMMSS>/`。原因：2026-10-23 曾出现

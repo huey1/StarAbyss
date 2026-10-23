@@ -206,6 +206,10 @@ L4       PASS：Enter 94.79% / W 3.20% / Esc 4.29% 像素变化，退出码 0，
 **断言口径（避免误读）**：套件读数 **872** 含跨层重复 117 项（`art` 96 与 `vfx` 21 在 headless 与图形各跑一次）；
 去重后源码层唯一断言 **755**；再加包层 90（75 + 15）为 **845**。README 早先写的"544 项"是 P6 阶段数字，已作废。
 
+**两方独立复跑**：上表数字由 QA 与 Lead **各自独立执行**得出同一结论——QA 在 `.local/validation/full_graphical.json`，
+Lead 在冻结验证（`.local/validation/t12_freeze_graphical.json`）与最终验收（`.local/validation/final_acceptance.json`）
+三次运行均为 `21/21 checks, 872 assertions, 0 failures`（耗时 52.8 / 52.8 / 53.8 s）。不是引用单方结论。
+
 逐项明细（真实退出码与耗时见 `.local/validation/t12_freeze_headless.json` 与 `t12_freeze_graphical.json`）：
 
 ```

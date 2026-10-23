@@ -103,7 +103,7 @@ $env:LOCALAPPDATA='D:\game\StarAbyss\.local\localappdata'
 ### 5. 未执行 / 不可自动验证项（如实记录）
 
 - **人工试玩**：手感、美术风格认可、动作过渡观感、音效听感、真实键鼠三局——需真人，自动化不能替代。
-- **L4 原生输入**：需要发布 exe 与 OS 级注入，且只能证明"画面响应"，不能证明完整闭环。
+- **L4 原生输入**（**已执行，RC0 冷/暖 + RC1 共 3 次 PASS**）：只能证明"画面响应 + 进程正常退出"，**不能**证明完整闭环与手感；`human_playtest_verified` 恒为 `false`。
 - **真实发布 exe 的完整闭环**：官方 release 模板禁止外部脚本注入，只能由 L2（源码）+ L3（包内数据）组合证明。
 - **其他 GPU / 音频设备 / 操作系统版本**：未验证，仅在当前机器（RTX 3050 / Vulkan / Forward+ / Windows）实测。
 
@@ -118,6 +118,12 @@ $env:LOCALAPPDATA='D:\game\StarAbyss\.local\localappdata'
 3. **单次性能采样不足以判定回归**：同一 shader、同一内容、同一天 6 次测量得到 2.38 / 3.95 / 3.01 / 2.39 / 2.59 / 2.27 ms（会话方差主导）。曾据此误判"GPU p95 上涨 50% 是 art 着色器改动"，后被本人撤回。**任何性能结论必须给出多次采样与方差。**
 4. **渲染分辨率一律以 PNG 实际像素为准**：`root.get_texture().get_size()` 在 `stretch/mode=canvas_items` 下与真实呈现分辨率不一致；抓屏须用**客户区**（`GetClientRect`+`ClientToScreen`），整窗（含标题栏/边框）会多出约 16×39 px（实测整窗 1296×759 vs 客户区 1280×720）。
 5. 自动化连续三局**不**证明 GDD 的 5–8 分钟人工局时，也不替代人工平衡判断。
+6. **`user://` 在受限环境不可写的降级行为（已被 clean-room 验证）**：
+   ```text
+   ERROR: Could not create directory: 'user://vulkan'.
+   ERROR: Can't create shader cache folder, no shader caching will happen: user://
+   ```
+   本验证环境禁止写 `%APPDATA%` → `user://` 落不下去，于是**每次启动都相当于冷启动**（实测到的 1.8–3.3 s 到菜单 / 3.2–4.6 s 到可操作是**上界**）。**游戏的行为是优雅降级：只警告、不崩溃、能正常开跑** —— 这是健壮性上的正面结论，不要写成缺陷。
 
 ---
 

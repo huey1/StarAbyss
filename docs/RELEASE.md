@@ -99,6 +99,31 @@ Get-FileHash StarAbyss.pck -Algorithm SHA256     # 与 BUILD_INFO.json 的 pck_s
 > `release_native_input_verified` 已由项目负责人在 QA 对 RC1 复验通过后授权置 `true`，证据字符串见该文件
 > `release_native_input_evidence` 字段。
 
+以下为 [TEST_REPORT.md](TEST_REPORT.md) §6 原文，与本节数据逐字一致（避免两份文档说法不一致）：
+
+```text
+L4 原生输入验证（发布 exe，QC 独立执行）
+验证对象：RC1 产物，exe sha256 d34d36f3…（109,268,480 B）、pck sha256 32e8588b…（3,166,556 B）
+方法：OS 级注入（Win32 keybd_event / mouse_event）+ 客户区抓屏（GetClientRect + ClientToScreen）+ 像素统计，
+     抓屏前断言 GetForegroundWindow()==游戏窗口；每张图须通过"是游戏画面"判据（4 < mean_luma < 200 且量化色数 ≥ 24）。
+结果（三次独立复现：RC0 冷 / RC0 暖 / RC1）：
+  开始本局（Enter）画面变化 94.78% / 94.78% / 94.79%
+  按住 W 画面变化        3.45%  / 3.28%  / 3.20%
+  Esc 画面变化           4.32%  / 4.36%  / 4.29%
+  稳定帧签名             lum 133.6 / 319 色（房间参照 room_preview 134.4 / 275）
+  退出方式 / 退出码      WM_CLOSE / 0；残留进程 0；客户区 1280×720
+启动与转场（两个转场 × 两个二进制，不可互相替代）：
+  启动 → 主菜单   工程内未按此口径测；发布 exe 冷 3477 ms / 暖 2565 / 2571 ms
+                     （Lead tools/startup_probe.py 独立测得暖 1767–1800 ms，方法差异已注明）
+  Enter → 首房    工程内 3548 ms（OPEN-01 记录）；发布 exe 冷 1119 ms / 暖 605 / 709 ms
+  首发体验         冷启动双击到可操作 ≈ 4.6 s，暖 ≈ 3.2 s；期间无自定义加载提示（引擎默认启动画面会显示）
+边界与诚实标注：
+  - 以上为"OS 级注入输入 + 画面差异佐证"的机械证明，**不等同人工试玩**。
+  - human_playtest_verified = false（无人工试玩记录）。
+  - 结论不覆盖手感、平衡、GDD 的 5–8 分钟局时；完整闭环由 L2（源码图形套件）+ L3（包内数据夹具）组合覆盖。
+  - 本验证环境禁止写 user://，每次启动相当于冷启动，故上述启动耗时为**上界**。
+```
+
 ### 5.2 性能与启动体验实测
 
 | 指标 | 冷启动 | 暖启动 | 说明 |

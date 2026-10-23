@@ -888,6 +888,20 @@ def attest_native_input(paths: Paths, evidence: str, verified_by: str) -> int:
         raise BuildError(
             "Refusing to attest a package whose release_candidate_eligible is not true.")
     before = {"exe": sha256_of(paths.exe), "pck": sha256_of(paths.pck)}
+    # Attestation must describe THE package that was actually built, so the artefacts are
+    # checked against the hashes recorded by that build before anything is written.
+    for field, kind, path in (("exe_sha256", "exe", paths.exe),
+                              ("pck_sha256", "pck", paths.pck)):
+        recorded = (info.get(field) or "").strip().lower()
+        if not recorded:
+            raise BuildError(f"BUILD_INFO.json has no {field}; cannot tie the attestation "
+                             "to a specific build.")
+        if recorded != before[kind]:
+            raise BuildError(
+                f"{path.name} is {before[kind]} but BUILD_INFO.json records {field} "
+                f"{recorded}: these artefacts are not the ones that were built and "
+                "verified. Rebuild instead of attesting.")
+    log(f"  artefacts match the built package: exe {before['exe'][:12]}…, pck {before['pck'][:12]}…")
     info["release_native_input_verified"] = True
     info["release_native_input_evidence"] = evidence.strip()
     info["human_playtest_verified"] = False

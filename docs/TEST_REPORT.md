@@ -136,9 +136,9 @@ $files = (Get-ChildItem docs\*.png).FullName
 
 ---
 
-## 5. L3 打包数据（中间包）
+## 5. L3 打包数据（中间包 v1/v2 → 最终 RC1）
 
-### 5.1 包的身份（**验证过两份不同的中间包，结论不同，务必区分**）
+### 5.1 包的身份（**验证过多份不同的包，结论不同，务必区分**）
 
 | 项目 | 中间包 v1（通过） | 中间包 v2（**坏包，已定位**） |
 | --- | --- | --- |
@@ -150,6 +150,8 @@ $files = (Get-ChildItem docs\*.png).FullName
 | 性质 | **中间包**：都是 `--export-pack` 产物，无 exe（导出模板尚在下载），后续 art/code 仍会变更 | 同左 |
 
 > **只凭"导出成功 + 体积正常 + pack_audit 通过"会误判包可用**：v2 的审计同样 75/75 全绿。区分两者的唯一手段是真跑 `export-smoke`。
+
+> **最终发布候选（RC1）与 v1/v2 都不同**：RC0/RC1 的 pck 为 `3,166,556` 字节、sha256 `32e8588bea0bc77d8c45983848d8f2313c6462d11090fc502d28f910b8319f0a`，`pack_audit 75/0` + `export-smoke 15/0` 均通过（详见 §6.5）。**判断"游戏内容有没有变"一律看 pck 的 sha256；`embed_pck=false` 时 exe 的 sha256 只反映引擎模板版本，内容变了它也不会变。**
 
 ### 5.2 结果（中间包 v1，3,161,884 字节）
 
@@ -224,17 +226,17 @@ SCRIPT ERROR: Invalid access to property or key 'skeleton' on a base object of t
 
 ## 6. L4 发布 exe 原生输入 —— **已执行，PASS**
 
-**验证对象（真实发布产物，不是工程源码）**
+**验证对象（真实发布产物，不是工程源码）** —— RC0 与 RC1 **字节级相同**，故三次运行（RC0 冷 / RC0 暖 / RC1）验的是同一份游戏内容：
 ```text
-exe  .local\export-diagnostics\isolated\exe_with_pck\StarAbyss.exe
+exe  builds\windows\star_abyss_windows_x64\StarAbyss.exe
      109,268,480 字节  sha256 d34d36f3be1a6c49c56525ae86469b92e4f417ddf0b43cf00dd80c385c4b0562
-pck  .local\export-diagnostics\isolated\exe_with_pck\StarAbyss.pck
+pck  builds\windows\star_abyss_windows_x64\StarAbyss.pck
      3,166,556 字节    sha256 32e8588bea0bc77d8c45983848d8f2313c6462d11090fc502d28f910b8319f0a
 启动: cwd = 包目录，直接运行 exe（无 --path / 无 --main-pack，exe 与 pck 必须同目录）
 ```
 工具：`.local/validation/native_input_check.ps1` —— PS 5.1 + `Add-Type` 调 `user32`（`keybd_event` / `mouse_event` / `SetCursorPos` / `SetForegroundWindow` / `ShowWindow` / `GetClientRect` / `ClientToScreen`），`System.Drawing.CopyFromScreen` 抓**客户区**，C# `LockBits` 做像素统计与差异，输出 `native_input_result.json`。
 
-### 6.1 三步判据（每步都是真注入 + 真截图 + 数值）
+### 6.1 三步判据（每步都是真注入 + 真截图 + 数值；下表为 RC0 暖缓存那一轮）
 
 | 步骤 | 注入 | 变化像素占比 | 变化后帧签名 | 判定 |
 | --- | --- | --- | --- | --- |
@@ -245,14 +247,16 @@ pck  .local\export-diagnostics\isolated\exe_with_pck\StarAbyss.pck
 | **3. Esc** | `keybd_event` Esc | **4.25%** | lum 133.9 / 368 色 | **CHANGED** |
 | **退出** | `WM_CLOSE` | – | 退出码 **0** | 正常退出，无残留进程 |
 
+> 三次复现的完整数值见 §6.5（Enter 94.78/94.78/94.79%、W 3.45/3.28/3.20%、Esc 4.32/4.36/4.29%），**每一轮都独立 PASS**。
+
 判定阈值 2%（变化像素占比）。**客户区实测 1280×720**；抓客户区而非整窗很关键——整窗（含标题栏/边框）测得的是 1296×759，容易误判成"渲染分辨率不对"。
 
 ### 6.2 启动与转场耗时（**两个转场 × 两个二进制，必须分开写**）
 
-| 转场 | 工程内二进制（编辑器，无 `shader_baker`） | 发布 exe（RC0） |
+| 转场 | 工程内二进制（编辑器，无 `shader_baker`） | 发布 exe（RC0/RC1，字节级相同） |
 | --- | --- | --- |
-| 启动 → 主菜单 | 未按此口径单独测 | 冷 **3477 ms** / 暖 **2565 ms** |
-| **Enter → 首房首帧** | **3548 ms**（dev 的 OPEN-01 记录） | 冷 **1119 ms** / 暖 **605 ms** |
+| 启动 → 主菜单 | 未按此口径单独测 | 冷 **3477 ms** / 暖 **2565 ms** / RC1 **2571 ms** |
+| **Enter → 首房首帧** | **3548 ms**（dev 的 OPEN-01 记录） | 冷 **1119 ms** / 暖 **605 ms** / RC1 **709 ms** |
 
 **结论行（定稿口径）**：
 > **OPEN-01 在发布包上不成立** —— `shader_baker` 使首房转场从工程内 **3548 ms** 降到发布包冷启动 **1119 ms**（约 1/3）。**注意这两者是不同二进制、不同转场的两次测量，不是同一指标的修正。**
@@ -285,7 +289,7 @@ pck  .local\export-diagnostics\isolated\exe_with_pck\StarAbyss.pck
 
 ### 6.3 措辞边界（必须遵守）
 
-- 本层的结论只能写成：**"在真实发布 exe 上，OS 级注入的 Enter / W / Esc 均引起画面变化（94.77% / 3.55% / 4.25%），且启动后稳定帧签名与房间参照图一致，退出码 0"**。
+- 本层的结论只能写成：**"在真实发布 exe 上，OS 级注入的 Enter / W / Esc 均引起画面变化（三次复现：Enter 94.78%/94.78%/94.79%、W 3.45%/3.28%/3.20%、Esc 4.32%/4.36%/4.29%），启动后稳定帧签名与房间参照图一致（lum 133.6 / 319–321 色），退出码 0，残留进程 0"**。
 - 这是**输入链路 + 渲染响应的机械佐证**，**不等于人工试玩验证**：`human_playtest_verified` 恒为 **`false`**，手感、平衡、5–8 分钟局时仍归人工验收与 L2 闭环。
 - 不得写成"完整闭环已在发布 exe 上验证"——闭环由 L2（源码）+ L3（包内数据）相加覆盖。
 
@@ -316,7 +320,17 @@ L4 明细（RC1，暖缓存）：`WINDOW HANDLE 1924 ms` / `启动→主菜单 2
 | 启动→主菜单 | 3477 ms | 2565 ms | **2571 ms** |
 | 退出码 / 残留进程 | 0 / 0 | 0 / 0 | **0 / 0** |
 
-> **RC1 发布候选指纹**：exe `d34d36f3be1a6c49c56525ae86469b92e4f417ddf0b43cf00dd80c385c4b0562`（109,268,480 B）、pck `32e8588bea0bc77d8c45983848d8f2313c6462d11090fc502d28f910b8319f0a`（3,166,556 B）、发布 zip `80bbf169…`（40,912,735 B）。
+> **RC1 发布候选指纹**：exe `d34d36f3be1a6c49c56525ae86469b92e4f417ddf0b43cf00dd80c385c4b0562`（109,268,480 B）、pck `32e8588bea0bc77d8c45983848d8f2313c6462d11090fc502d28f910b8319f0a`（3,166,556 B）。
+>
+> **最终发布 zip**：`star_abyss_1.0.0_windows_x64.zip`（40,913,090 B，sha256 `dd9dda5e5fc04a1fd52d7f312ca7bd1568c368e3434fdb1be24762fec7ab6ea6`）。该 zip 是在 L4 通过后由 release 用可复现命令 `py tools\build_windows.py --attest-native-input` 重新背书的版本（写入 `BUILD_INFO.json` 的 `release_native_input_verified: true` + 证据串），**exe 与 pck 哈希在背书前后未变**，故上述 L4 结论仍对应该 zip 内的同一份游戏内容。背书后 release 另跑 `--verify-package`：解压到全新目录 → 6/6 文件哈希匹配 `SHA256SUMS.txt` → 从该目录启动 `exit 0` / Forward+ / 无脚本错误。
+>
+> **背书的可信度（release 提供的三重防护，已含其自测）**：`--attest-native-input` ①拒绝为 `release_candidate_eligible != true` 的包背书；②背书前核对磁盘产物哈希是否等于包内 `BUILD_INFO.json` 记录的 `exe_sha256`/`pck_sha256`（把背书钉死在具体构建上，防"先换包再背书"）；③写完只允许改元数据，并断言 exe/pck 与背书前逐字节相同。**因此该流程无法在改动游戏内容的前提下产生"已验证"记录。** 其负向自测：把 pck 第 1000 字节翻转一位后背书 →
+> ```text
+> FAIL: StarAbyss.pck is a4e1795a… but BUILD_INFO.json records pck_sha256 32e8588b…:
+>       these artefacts are not the ones that were built and verified. Rebuild instead of attesting.
+> exit=1
+> ```
+> **注**：该加固是在本次背书**之后**完成的，**未改变任何已发布哈希**（zip 仍为 40,913,090 B / `dd9dda5e…`），只影响后续背书行为。
 
 ---
 
@@ -421,9 +435,9 @@ cd D:\game\StarAbyss
 & $G --headless --main-pack $PCK --script D:\game\StarAbyss\tools\pack_audit.gd --audio-driver Dummy
 & $G --headless --main-pack $PCK --script D:\game\StarAbyss\tools\pack_diagnose.gd --audio-driver Dummy
 & $PY tools\verify.py --packed $PCK --only export-smoke
-# L4（exe 产出后）
+# L4（对最终发布 exe；cwd = 产物目录，勿动鼠标键盘）
 powershell -NoProfile -ExecutionPolicy Bypass -File .local\validation\native_input_check.ps1 `
-    -Exe '<release exe 路径>' -OutDir 'D:\game\StarAbyss\.local\validation'
+    -Exe '<产物目录>\StarAbyss.exe' -OutDir 'D:\game\StarAbyss\.local\validation'
 # 快速单脚本（务必重定向两个用户目录，否则编辑器缓存会报假 ERROR）
 $env:APPDATA='D:\game\StarAbyss\.local\appdata'; $env:LOCALAPPDATA='D:\game\StarAbyss\.local\localappdata'
 & $G --path godot --headless --fixed-fps 60 --audio-driver Dummy --script res://tests/robustness_test.gd
@@ -443,6 +457,12 @@ $env:APPDATA='D:\game\StarAbyss\.local\appdata'; $env:LOCALAPPDATA='D:\game\Star
 .local/validation/full_graphical_final.stdout.txt    # L2 最终全量完整输出
 .local/validation/<check>.log / *.output.txt        # 每个检查的引擎日志与 stdout/stderr
 .local/validation/probe_import_localappdata*.log    # DEF-01 对照实验
-.local/validation/native_input_check.ps1            # L4 原生输入验证脚本（待 exe）
+.local/validation/native_input_check.ps1            # L4 原生输入验证脚本（已对 RC0 冷/暖 + RC1 三次 PASS）
+.local/validation/native_input_result.json          # L4 机器可读结果（含每一步变化占比、退出码、残留进程数）
+.local/validation/native_input_before.png           # L4 基线：主菜单（lum 25.4 / 117 色）
+.local/validation/native_input_after_click.png      # L4 开始本局后首帧
+.local/validation/native_input_first_room_frame.png # L4 首个房间签名帧（OPEN-01 计时终点）
+.local/validation/native_input_after_move.png       # L4 按住 W 之后
+.local/validation/native_input_after_esc.png        # L4 Esc 暂停之后
 docs/TESTING.md                                     # P7 分层方法与命令（QA 维护）
 ```
