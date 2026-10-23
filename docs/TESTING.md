@@ -419,3 +419,81 @@ P2 专项回归人工练习：打开 scenes/levels/test_arena.tscn 按 F6，检�
 - 近战采用 Hurtbox 中心的扇形/高度/视线过滤，尚非连续剑刃扫掠；尸体不保留实体碰撞。
 - 修改共享碰撞几何后需离线重烘焙；修改体素高度还需核对 NavigationAgent.path_height_offset。
 - 此条为 P3 历史边界：当时尚无房间/祝福。当前 P4 已实现上述普通房流程和阶段/失败结算；Boss、主菜单及完整胜利闭环仍未实现，未导出 Windows EXE，未验证其他 Godot/GPU/音频设备。
+
+---
+
+## P8 阶段验证层更新（2026-10-23，Lead 记录）
+
+本节补记 P8（设计落地）之后验证体系的变化。**所有数字均为实际运行结果，命令可复现。**
+
+### 当前四层 + 一层（新增）
+
+| 层 | 命令 | 规模 | 说明 |
+| --- | --- | --- | --- |
+| **L1 无头逻辑** | `py tools/verify.py --headless-only` | 13 checks / **561 断言** | 纯逻辑与资源引用，无需桌面 |
+| **L2 图形全量** | `py tools/verify.py` | 22 checks / **913 断言** | 真实窗口、真实 Forward+ 渲染、注入输入 |
+| **L3 打包审计** | `py tools/build_windows.py` | pack-audit **75** + 导出冒烟 **15** | 含「包内不含 tests/」「主场景完整」「187 资源引用可解析」 |
+| **L3 打包全量** | `py tools/verify.py --packed <pck>` | 24 checks / **1022 断言** | 以成品 `.pck` 为运行体跑全套 |
+| **OCR 渲染层（新增）** | `py tools/ocr_check.py <png> --expect "<文本>"` | 按图计 | 机械证明「该文字确实被渲染到画面上」 |
+| **L4 原生 OS 输入** | 见 `docs/QA_REPORT.md` | ×3 轮 | 对发布 exe 注入真实操作系统按键 |
+
+### OCR 渲染层的定位（重要，勿误读）
+
+`tools/ocr_check.py` 使用系统自带 `Windows.Media.Ocr`（`zh-Hans-CN`），可把截图识别成文字并与源码字面量**逐字比对**（`--expect-from-source FILE:LINE`）。
+
+- **它证明**：该字符串确实被渲染在屏幕上（不再是"这块区域有像素变化"这种弱证据）。
+- **它不证明**：可读性、排版是否溢出、手感、平衡、单局时长。
+- 因此 `human_playtest_verified` **必须保持 `false`**。理由不是"没有验证能力"，而是 OCR 只能覆盖"文字被渲染"这一层。
+- 已知偏差：OCR 会把 `·` 识为 `．`、全角／半角混用，比对时必须如实列出偏差字符，不得只贴匹配成功的部分。
+
+### 命令与环境硬约束
+
+- 运行任何 Godot / 游戏进程前，**必须**把 `APPDATA`、`LOCALAPPDATA`、`TEMP`、`TMP` 重定向到 `D:\game\StarAbyss\.local\` 下的目录。否则 Godot 无法写 `D:\game` 之外，会**静默产出 0 字节 `project.binary` 且仍返回 exit 0**。
+- **图形套件对桌面焦点敏感**：`mouse capture` 断言依赖窗口持有 OS 前台。夹具已在断言前调用 `DisplayServer.window_move_to_foreground()` 恢复该前置条件（这是真实玩家必然具备的条件，不是放宽断言）。运行 L2/L3 时不要让其他进程抢占前台，也不要同时有 Agent 在写测试文件。
+- 含中文的输出**不要用 PowerShell 重定向**（会按 GBK 编码写出并损坏 UTF-8）。用工具自带的 `--json` 落盘，或 Python 显式 `encoding='utf-8'`。
+
+### 未验证事项（必须与已验证事项分开陈述）
+
+| 项 | 状态 |
+| --- | --- |
+| 真人试玩（可读性、手感、平衡、单局时长） | **未进行**（`human_playtest_verified = false`） |
+| 真人难度分布 | **未测量**。自动化夹具是 oracle 策略（逐帧读预警、反应延迟 0），其零掉血结果**不能**代表真人 |
+| DPI 缩放 / 多显示器 / 其他 GPU 驱动 | 未覆盖，仅本机 RTX 3050 / Forward+ 验证 |
+
+### L4 原生 OS 输入：当前真实状态（2026-10-23 15:50 记录）
+
+**结论：未达成连续 3 轮 PASS，因此发布包内 `release_native_input_verified` 保持 `false`。这一项是本次交付唯一未通过的验证层。**
+
+#### 已证明的事实（可复现）
+
+| 事实 | 证据 |
+| --- | --- |
+| 发布 exe 启动并渲染真实画面 | 首发帧 0.6–2.3 s；OCR 读到主菜单、战斗房 HUD（`100 / 100`、`45 / 45` `寻敌`、`01 / 03 星辉前庭`）、暂停弹窗（`已暂停`、`继续探索`） |
+| **不存在"按键导致崩溃"缺陷** | `.local/alive_test.py`：空闲 8 s + 一次 Esc + 按住 W 1.2 s，共 20 条采样记录，进程**全程存活**、`exit_code` 恒为 null、窗口始终 `1280x720`、`leftover_processes = 0` |
+| 原生输入确实送达游戏 | 点击/Enter 使本局开始（战斗房渲染）；Esc 使暂停弹窗出现 |
+
+#### 为什么仍判为"未通过"
+
+不是游戏缺陷，是**采集环境限制**，三件事叠加：
+
+1. **截图抓的是屏幕区域，不是窗口内容**。本机同时挂载 `MuMu Virtual Display Adapter` 与 `GameViewer Virtual Display Adapter`，且 DSH GUI 窗口共享同一桌面。游戏窗口被遮挡时，截到的是别的窗口——实测"全白帧 `lum 231` / 约 700 色"就是 GUI 自身，而"彩色帧 `lum 179` / 8170 色"才是游戏。
+2. **两个验证工具都缓存窗口句柄**，遮挡/重建后继续复用旧句柄，报成 `GetClientRect failed`，看起来像"窗口失效"。
+3. **前台归属不由 guest 内进程完全决定**。`keybd_event` 只投递给当前前台窗口，而本机的串流/虚拟显示层参与决定前台，导致前台抖动；`run_manager.gd:61-63` 的失焦自动暂停（这是玩家可感的正确行为）随即把游戏暂停，按键看起来"被吞"。
+
+#### 关闭这一项所需的条件
+
+在**独占 GPU 的虚拟机**或**物理机空窗时段**上，运行：
+
+```powershell
+py tools\native_input_probe.py --out <dir>          # 热启动
+py tools\native_input_probe.py --out <dir> --clear-shader-cache   # 冷启动
+py tools\build_windows.py --verify-package builds\windows\star_abyss_1.0.0_windows_x64.zip
+py tools\build_windows.py --attest-native-input --evidence "<实测数字>" --verified-by "<who>"
+```
+
+连续 3 轮（冷/热/冷）PASS 之后才允许 attest。**在满足该条件之前，不得把 `release_native_input_verified` 置为 `true`。**
+
+#### 工具状态
+
+- `tools/native_input_probe.py`（Lead 编写）：每次截图前**重新解析窗口句柄**，绕开缓存句柄失效；未做前台强占。已能稳定产出"进入本局"与"暂停弹窗"的截图证据。
+- `tools/native_input_check.ps1`（QA/release-integrator 版）：断言前强制校验前台、未送达按键不计入分母、修掉 `trace.toggled` 恒 false 的 bug、去掉硬编码损坏的中文 user-data 路径。**该工具自身尚未被验证通过**，保留作为后续继续工作的起点。
