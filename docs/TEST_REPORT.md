@@ -340,7 +340,7 @@ L4 明细（RC1，暖缓存）：`WINDOW HANDLE 1924 ms` / `启动→主菜单 2
 | `BUILD_INFO.json` 记录的 `exe_sha256`/`pck_sha256` vs zip 内实际字节 | **`True` / `True`** |
 | `release_native_input_verified` / `human_playtest_verified` | **`True` / `False`**（两个标志分开，符合定稿口径） |
 | `human_playtest_note` 内容 | `无人工试玩记录；L4 为 OS 级注入输入的机械佐证，不等同人工验收` —— **UTF-8 合法，无替换字符** |
-| zip 成员名编码 | 唯一的非 ASCII 成员 `试用说明.txt` 正确置了 **UTF-8 标志位 `0x800`**，其余为 ASCII |
+| zip 成员名编码 | 唯一的非 ASCII 成员 **`试玩说明.txt`**（码点 `U+8BD5 U+73A9 U+8BF4 U+660E`）正确置了 **UTF-8 标志位 `0x800`**，其余 6 个成员为 ASCII（`0x000`） |
 | 证据串是否含我实测的数字 | 含（`94.79%/3.20%/4.29%`、`exit code 0`、`0 leftover processes`、`client 1280x720`、`pack_audit 75/0 and export-smoke 15/15`） |
 
 > **一次自我纠错（诚实记录）**：我最初用 `Get-Content -Raw` 读 `BUILD_INFO.json` 时看到中文是 `鏃犱汉宸ヨ瘯…`，**一度怀疑发布包元数据乱码**。经 Python 以 UTF-8 解码 + 写文件再读确认：**文件本身完全正确，乱码是我终端把 UTF-8 当 GBK 显示**。**没有把这个假缺陷报出去**（先证伪再报告）。该陷阱已写入 `TESTING.md` 环境约束第 11 条。审计原始输出：`.local/validation/zip_audit_utf8.txt`。
