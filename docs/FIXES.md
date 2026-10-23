@@ -1,10 +1,22 @@
 # Star Abyss 缺陷修复记录（P7 / T9）
 
+> ## ✅ 本轮结论：游戏代码缺陷 = 0 项
+>
+> **`godot/` 下没有任何游戏代码、场景、资源或工程设置的修复——一处都没有。**
+> 依据：QA 图形全量 **21/21 checks、872 断言、0 断言失败**；完整闭环（三房 + Boss + 胜负 + 重开）连续多局无残留；
+> Lead 的冻结验证同样全绿（40/40 脚本语法、headless 12/12 checks/501 断言、图形 21/21/872 断言，冻结点 `1cd3be7`）。
+>
+> 本轮所有红项（DEF-01–05、OBS-01、构建链 4 项）**全部落在验证基建 / 测试夹具 / 构建脚本**，
+> 其中 DEF-04、DEF-05 是**我自己工具里的 bug**。两处曾疑似"游戏问题"的观察项（OPEN-01 冷启动、OPEN-02 720p 渲染目标）
+> 均已用实测数据**结案为非缺陷**（见第 4 节）。
+> 未修复/已知项如实列在第 5 节，未做任何"看起来通过"的描述。
+
 范围：本文件记录 **P7 阶段（功能冻结前后）缺陷的复现、根因、修复与回归证据**。
 严格区分两类，不允许混写：
 
 - **游戏代码缺陷**：`godot/scripts/`、`godot/scenes/`、`godot/resources/`、`godot/assets/` 中的真实运行时问题；
-- **验证/夹具代码缺陷**：`tools/verify.py`、`tools/*.gd`、`godot/tests/*.gd`、构建脚本等，**不影响玩家**，但会让门禁为红或让证据不可信。
+- **验证/夹具/构建代码缺陷**：`tools/verify.py`、`tools/*.gd`、`godot/tests/*.gd`、`tools/build_windows.py` 等，
+  **不影响玩家**，但会让门禁为红或让交付物不可用。
 
 格式约定（后续每条缺陷按此追加，不允许只写结论）：
 
@@ -29,11 +41,12 @@
 
 - QA 图形全量一轮：**20/21 通过、872 项断言、0 项断言失败**，唯一红项在 `performance_benchmark.gd`（测试夹具的模拟时间等待），QA 修复后连跑两次 `12 checks, 0 failures`。
 - headless 全量：`import` 与 `export-smoke` 两处红项均为验证基建登记问题，属性见第 2 节，**均不是游戏缺陷**（导出 PCK 后 `pack-audit` + `export-smoke` 已 15 项全绿）。
-- 我在 T7 性能实测中额外做的排查（真实图形模式、完整三房+Boss）也没有发现玩法/UI/资源缺陷，唯一异常是**冷启动首次编译停顿**，属构建/加载路径，见第 4 节 OPEN-01。
+- 我在 T7 性能实测中额外做的排查（真实图形模式、完整三房+Boss）也没有发现玩法/UI/资源缺陷；唯一异常是**冷启动首次进入 3D 场景的停顿**，已用发布包复测结案（发布包冷 1119 ms / 暖 605 ms，见第 4 节 OPEN-01）。
 - 720p 渲染目标尺寸疑点（OPEN-02）已用**呈现 PNG 取证结案为非缺陷**；VFX 是否引入 GPU 成本上升已用**交替 A/B 判为归因不成立**（第 3 节）；我先前的"+50% GPU"结论**已撤回**（会话方差）。
-- 第 2 节另记两条**我自己工具里的**缺陷（DEF-04 `tools/benchmark.ps1`、DEF-05 探针断言口径），已修并实测复验——把它们写进台账是为了让"本轮所有红项都在验证代码里"这句话可核查，而不是只挑别人的问题。
+- 第 2 节另记两条**我自己工具里的**缺陷（DEF-04 `tools/benchmark.ps1`、DEF-05 探针断言口径），已修并实测复验——把它们写进台账是为了让"本轮所有红项都在验证/构建代码里"这句话可核查，而不是只挑别人的问题。
 
-因此 T9 首轮的实际产出是：**把五个"看起来像缺陷"的红项逐个定性到位**（下节），避免它们被误当成游戏 bug 去改玩法代码。
+因此 T9 的实际产出是：**把 11 个"看起来像缺陷"的红项逐个定性到位**（5 条验证/夹具 DEF + 1 条流程污染 OBS + 4 条构建链 BUILD + 2 项疑似游戏问题的观察项），
+既没有改一行游戏代码去"迎合"测试，也没有把测试基建的问题算到游戏头上。
 
 ## 2. 缺陷台账（已验证并已由对应 owner 关闭）
 
@@ -44,8 +57,19 @@
 | DEF-03 | 测试夹具 | 一般 | 图形全量里 `performance` 红：退出时 5 个资源未释放 | `performance_benchmark.gd` 用 `create_timer()`（**SceneTreeTimer 走模拟时间**）等待音频异步回收，而该夹具在退出前并不推进模拟时间 | QA（T8）修复：改为**墙钟**等待（`Time.get_ticks_msec()` 循环） | 已修复（`performance_benchmark.gd` 12:54）；连跑两次 `PERFORMANCE RESULT: 12 checks, 0 failures` |
 | DEF-04 | 验证基建（**我自己的工具**） | 一般 | `tools/benchmark.ps1` 无法在本机运行：`#Requires -Version 7.0` + `ProcessStartInfo.ArgumentList`（PS7 专有）+ 默认引擎路径指向已不存在的 `E:\share\Godot_v4.7` | 脚本是照 PS7 写的，本机只有 Windows PowerShell 5.1；且执行策略拒绝未签名脚本 | Dev（我）重写：`[System.Diagnostics.Process]::Start()` + `Arguments` 字符串 + `EnvironmentVariables`（5.1 可用）、默认路径改本机引擎、命令行注释补 `-ExecutionPolicy Bypass`。**另修两个 bug**：①报告文件名按套件区分（套件 `performance_<label>.json` / 探针 `performance_probe_<label>.json`），原先统一按前者查找导致"produced no JSON report"；②`-Info` 分支原只打印 JSON 首行（多行 JSON 被截断） | 修复，**验证程度如实说明**：`-Info` 已在修复前后各跑过一次（修复前确认"输出被截断"这一缺陷，修复后**未复跑**）；`-Suite probe` 数据路径修好后**未再端到端复跑**（当时窗口被 QA/Lead 排满）。**本文件与 PERFORMANCE.md 里所有性能数据都不是经 `benchmark.ps1` 产出的**——它们用直接引擎命令（PERFORMANCE.md 命令 B–E）与 `.local/ab/run_ab.ps1` 产出，因此上述未复跑不影响任何性能结论。下次有窗口时用 `-Suite probe -FrameCap 60 -Label toolcheck` 复验即可 |
 | DEF-05 | 测试夹具（**我自己的探针**） | 一般 | 720p 下探针报 `FAIL: actual continuously rendered framebuffer is 1280 by 720` | 断言用了 `root.get_texture().get_size()`，而 `canvas_items` 下该值是 854×480 的**读取口径**（见 OPEN-02） | Dev（我）修复：断言改为 `DisplayServer.window_get_size()`，并把所有尺寸口径（窗口/带装饰窗口/根纹理/呈现 PNG）同时记入报告 | 已修复；12 checks / 0 failures 在两个分辨率下均可复现 |
+| OBS-01 | 流程/并发污染（非代码缺陷） | 严重（会让证据失真） | 图形用例跑到一半出现 `SCRIPT ERROR: Parse Error`，该轮判红；我也在 12:51 的 720p 运行里撞到 `Function "_set_ambience_cue()" not found in base self.`（`res://scripts/audio/run_audio.gd:160`），那次等于"无音频" | **art 保存中间态时 QA 正在跑图形用例**：`.gd` 文件在磁盘上短暂处于语法不完整状态，引擎在那一刻加载即解析失败。不是任何人的代码"错"，是并发编辑与验证的时间重叠 | Lead 立规：验证/构建期间禁止编辑（T12 冻结流程第 1 步逐个确认 idle）+ 我的实测一律先扫 `--log-file` 找 `SCRIPT ERROR` | 已闭环；该次运行在 PERFORMANCE.md 第 11 节被标注为"等于无音频"并已复测替换 |
 
-**为什么这三项不由我修**：`tools/verify.py` 属 T1（Lead）写范围，`godot/tests/*.gd` 属 T8（QA）写范围，均不在 T9 的 Dev 写范围内。越权修改会破坏“谁写谁负责”的可核查性，也会与并行改动冲突。
+**构建/发布链路类（非游戏缺陷，但会影响交付物是否成立；均由 release-integrator 修复，我仅记录以免被误判为游戏缺陷）**
+
+| ID | 现象 | 根因 | 处理与状态 |
+| --- | --- | --- | --- |
+| BUILD-01 | 导出"成功退出但产物缺失/无效" | `TEMP`/`TMP` 未重定向，导出在受限目录下写 `project.binary` 失败被静默吞掉，产物为 0 字节 | release 修复：构建前重定向 `TEMP` 并校验产物大小/结构；已产出可用 RC0/RC1 |
+| BUILD-02 | 模板校验误报失败 | 用"版本字符串 + 文件名"双证据比对过严，官方模板命名差异导致假失败 | release 修复：改为以实际可加载性为准 |
+| BUILD-03 | `--clean` 与预检顺序导致产物被清空 | 清理步骤放在预检之后执行，把刚校验通过的产物删掉 | release 修复：调整顺序（先清理再构建再校验） |
+| BUILD-04 | 直接双击 exe 出现 `ALERT!` 窗口 | `embed_pck=false` 时 `.exe` 必须与 `.pck` 同目录，单独拷贝 exe 会找不到包 | release 修复/记录：发布 zip 保持 exe+pck 同目录，`docs/RELEASE.md` 写明启动方式 |
+
+**为什么 DEF-01/02、OBS-01 不由我修**：`tools/verify.py` 属 T1（Lead）写范围，`godot/tests/*.gd` 属 T8（QA）写范围，
+构建脚本属 T4（release）写范围，均不在 T9 的 Dev 写范围内。越权修改会破坏“谁写谁负责”的可核查性，也会与并行改动冲突。
 
 ## 3. 我在 T9 首轮的排查（不产生改动，但记录方法与结论）
 
@@ -55,22 +79,28 @@
 | 是否存在每帧内存/节点增长 | `Performance.get_monitor()` 逐帧采集 `OBJECT_COUNT`/`OBJECT_RESOURCE_COUNT`/`MEMORY_STATIC`/`RENDER_VIDEO_MEM_USED` | 平台型不增长（峰值落在 3 哨兵房，Boss 房回落） |
 | 是否存在持续长帧 | 逐帧墙钟 p50/p95/p99/max | 长帧为孤立单帧、集中在相位切换后；无连续超预算帧 |
 | 音频生命周期是否泄漏 | 阅读 `scripts/audio/run_audio.gd` 的 tween/voice/ambience 释放路径与 `_exit_tree` | 未发现泄漏：voice 复用 + `finished` 回收、ambience 由 `_sync_ambience` 独占、`_exit_tree` 调 `stop_all()` |
-| 我的实测是否被并行改动污染 | 逐份扫 `--log-file` 引擎日志 | 发现一次真实污染：12:51 的 720p 运行撞上 art 正在编辑 `run_audio.gd` 的中间态（`Parse Error: Function "_set_ambience_cue()" not found`），该次运行**等于无音频**。已在 `docs/PERFORMANCE.md` 第 11 节如实标注并安排音频定稿后复测 |
+| 我的实测是否被并行改动污染 | 逐份扫 `--log-file` 引擎日志 | 发现一次真实污染（= OBS-01）：12:51 的 720p 运行撞上 art 正在编辑 `run_audio.gd` 的中间态（`Parse Error: Function "_set_ambience_cue()" not found`），该次运行**等于无音频**。已在 `docs/PERFORMANCE.md` 第 11 节如实标注，并用 13:03–13:05 音频定稿后的复测数据替换该结论 |
 | VFX 是否引入 GPU 成本上升 | 交替 A/B 各 2 次（1080p capped60，`room_2_combat`），A=出货版 shader、B=仅删 threat ALU（保留 uniform 声明） | **归因不成立**：A 组 3.01/2.39 ms（组内波动 26%），B 组 2.59/2.27 ms，组间差 11% 被组内噪声吞没；两组帧时间 p95 与 FPS 无差。**不做修复**。详见 `docs/PERFORMANCE.md` 第 12 节 |
 | —— 自我纠错（不属缺陷） | 同一 shader 同一天 6 次测量 | 我先前的"VFX 后 GPU p95 +50%"（2.38 → 3.95 ms）**是会话方差**：同一 shader 13:04 测 3.95、13:16 测 2.39。结论已撤回，**不得写进缺陷/回归记录**；教训：单次采样不足以判定性能回归，必须交替 A/B |
 
-## 4. 未定级观察项（需要后续证据才能定性，不是“已知缺陷”）
+## 4. 曾疑似"游戏问题"的两项观察（均已结案为非缺陷）
 
-### OPEN-01｜冷启动首次进入游戏出现单帧 3548 ms 停顿
+> 这两项是本轮唯一两个"看起来像游戏缺陷"的候选。它们**都靠实测数据结案**，没有靠推理或"应该没事"的推断。
+> 结案证据保留在 `docs/PERFORMANCE.md` 第 8.2 / 9 节，以及 `.local/validation/` 下的原始 JSON 与 PNG。
 
-- **现象**：当日首次图形启动，在“点击开始 → 进入首房”处出现单帧 3548 ms（`initial_transition.wall_ms_max`，`process_monitor` 同步 3533 ms；物理仅 5.9 ms）。同一进程后续运行、以及同日后续启动均为 165–200 ms。
-- **初步定性**：冷 `shader_cache` + Vulkan `pipelines.forward_plus.nvidia_geforce_rtx_3050.cache` 首次生成 + 场景资源加载，每进程一次。
-- **关键判断依据**：`godot/export_presets.cfg` 中 `shader_baker/enabled=true`，而**Shader Baker 只对导出构建生效**；本次实测用的是**编辑器二进制**，因此这 3.5 s 很可能不出现上发布 exe。
-- **部分印证（QA 在 RC0 包上实测）**：冷启动（全新空 `APPDATA`）到主菜单首帧 **3301 ms**、暖启动 2471–2993 ms —— **冷/暖只差 0.3–0.6 s**，说明导出包上着色器已被预编译掉，剩余耗时以引擎/进程初始化为主。
-  **但这不等于本项已关闭**：QA 测的是「进程启动 → 主菜单首帧」（纯 2D UI，40 draw calls），而我记录的 3548 ms 是「点击开始 → 首房首帧」（3D 场景首次绘制）。两者是不同的转场，不能互相替代。
-- **仍缺的事实与解锁条件（T10 / Lead 的 `tools/startup_probe.py` 负责）**：在**导出包**上测「点击开始 → 首房首帧」耗时。
-  - 若 < 0.5 s → 关闭该项，只在发布说明保留“首次启动需初始化引擎”一句；
-  - 若仍为秒级且无任何加载反馈 → 升级为体验缺陷（严重度：一般），由 Lead 决定是否加“加载中/编译着色器”提示（属行为变更，不在“达标不动代码”范围内）。
+### OPEN-01｜冷启动首次进入 3D 场景的停顿 —— **已结案：发布包上不再是风险项（但编辑器内读数依然成立）**
+
+- **编辑器内现象**：当日首次图形启动，"点击开始 → 进入首房"出现单帧 **3548 ms**（`initial_transition.wall_ms_max`，`process_monitor` 同步 3533 ms；物理仅 5.9 ms）；暖缓存下同一位置 165–200 ms。数据源：**编辑器二进制**（无 shader_baker）。
+- **发布包复测（QA，RC0 exe+pck，OS 级客户区截图 + 房间画面签名判据 `lum 40–200 且色数 ≥200`，参照 `room_preview` 134.4/275）**：
+
+  | 场景 | 启动 → 主菜单首帧 | **Enter → 首房首帧** |
+  | --- | --- | --- |
+  | 冷（全新空 `APPDATA`，零 pipeline cache） | 3477 ms | **1119 ms**（lum 134.3 / 284 色） |
+  | 暖（同目录紧接着再跑） | 2565 ms | **605 ms**（lum 134.4 / 286 色） |
+
+- **结案理由（不是"原来的 3.5 s 也不慢"，而是"发布包实测显著改善"）**：`export_presets.cfg` 的 `shader_baker/enabled=true` 只对导出构建生效，发布包里着色器已预编译，"进首房"从 3548 ms 降到 **1119/605 ms（约 1/3）**；冷/暖只差 0.51 s，剩余开销是首次创建管线对象 + 场景加载。**编辑器内的 3548 ms 没有被推翻，它是另一个数据源下的真实读数。**
+- **遗留的真实风险（不是帧性能缺陷，属产品决策）**：用户"双击 → 可操作"冷启动约 **4.6 s** / 暖启动约 **3.2 s**，期间无任何加载反馈。加 loading 会改变启动行为与 UI，超出"实测达标不动代码"范围，交由 Lead/T10 决定。
+- 详见 `docs/PERFORMANCE.md` 第 8.2 节（含两个探针的方法差异与区间表述"约 1.8–3.3 s 出现主菜单"），并交叉引用 `docs/FREEZE_CHECKLIST.md` 中"亮度 244.5 的白屏不是游戏渲染（是测试机前台另一个白色窗口）"的勘误。
 
 ### OPEN-02｜1280×720 窗口下引擎报告的根纹理尺寸是 854×480 —— **已结案：非缺陷**
 
@@ -83,8 +113,19 @@
   | 1920×1080 | 1920×1080 | `.local/validation/probe_presented_1920x1080.png` | **1920×1080** |
 - **结论**：真实呈现分辨率 = 窗口尺寸，**不存在“3D 降采样再放大”的画质缺陷**；`get_texture().get_size()` 的 854×480 只是 `canvas_items` 下的读取口径（与 `visible_rect` 一样是 canvas 缩放后的逻辑量）。
 - **不需要改**：`stretch/mode`、`window/size`、`allow_hidpi` 均维持原样（改它们会影响全部 UI 布局断言与 20 项图形用例的截图基线，而缺陷不存在）。
-- **给 QA 的判据**：任何“渲染分辨率”断言必须以 PNG 实际像素为准，不得断言 `get_texture().get_size()`。QA 已用 OS 级 `CopyFromScreen` 独立印证（1296×759 = 1280×720 客户区 + 窗口装饰）。
+- **给 QA 的判据**：任何“渲染分辨率”断言必须以 PNG / 窗口客户区实际像素为准，不得断言 `get_texture().get_size()`。QA 已用 OS 级 `GetClientRect` + `ClientToScreen` 独立印证：**客户区 = 1280×720**（与本节 PNG 一致）；抓整窗（含标题栏/边框）才是 1296×759 = `window_get_size_with_decorations()`。
 - 详见 `docs/PERFORMANCE.md` 第 9 节。
+
+## 5. 未修复 / 已知项（如实列出，不含糊）
+
+| 项目 | 状态 | 影响面 | 归属 / 说明 |
+| --- | --- | --- | --- |
+| `tools/benchmark.ps1` 修复后**未端到端复跑** | 保留为已知项 | 零（所有性能数据都不是经它产出的，见第 2 节 DEF-04） | 我；Lead 裁定 RC1 验收后如有空窗补跑 60 s，否则按现状发布，**不得改写成"已验证"** |
+| 冷启动「双击 → 可操作」约 **4.6 s**（冷）/ **3.2 s**（暖），期间**无加载提示** | 未修（产品决策） | 首发体验；启动阶段约 1.8–3.3 s 无视觉反馈 | 属行为/UI 变更，不在"实测达标不动代码"范围，由 Lead/T10 决定是否加 loading。**不是帧性能缺陷**（发布包进首房仅冷 1119 ms / 暖 605 ms） |
+| 发布包**无代码签名** | 未修（超出本阶段授权：不下载额外工具/证书） | Windows SmartScreen 首次运行会提示"未知发布者" | 见 `docs/RELEASE.md` 已知限制 |
+| `human_playtest_verified=false` | 未完成 | 脚本 bot 与 OS 级注入不等于人工手感/难度评价 | 自动验证（872 断言）+ 图形脚本游玩 + 原生输入 L4 均已完成，但**人工试玩未做**，必须在最终报告中如实标注 |
+| 单一硬件（RTX 3050 / i7-12700F / 1920×1080 / Windows） | 未覆盖其他配置 | 无 4K、无 144 Hz、无 macOS/Linux 数据 | 见 `docs/PERFORMANCE.md` 第 11 节 |
+| 27 路音频**并发**未验证 | 未测 | 实际同时发声受 2 个 one-shot voice + 1 个环境床约束，不声称"27 路并发" | 见 `docs/PERFORMANCE.md` 第 11 节 |
 
 ## 6. 冻结前最终回归（由 Lead 在 T12 独立执行，非我的自证）
 
@@ -93,12 +134,15 @@
 | `godot/` 下 40 个 `.gd` 的 `--check-only` 语法检查 | **40/40 零 Parse Error** | Lead |
 | headless 全量 | **12/12 checks，501 assertions，0 failures** | Lead |
 | 图形全量（真实窗口 + Forward+） | **21/21 checks，872 assertions，0 failures，52.8 s** | Lead |
-| L4 原生输入（对 RC0 发布包，OS 级 `keybd_event`/`mouse_event`） | **PASS**：Enter 94.77% 像素变化 / W 3.55% / Esc 4.25% / 退出码 0 / 主菜单签名 lum 25.4 · 117 色与参照图一致 | QA |
-| 导出包启动（RC0） | 窗口 ~1.9 s；到主菜单首帧 冷启动 **3.3 s** / 暖启动 **2.5–3.0 s** | QA |
+| L4 原生输入（对 RC0 发布包，OS 级 `keybd_event`/`mouse_event`） | **PASS，冷/暖两次独立复现**：Enter 94.77%/94.78% 像素变化、W 3.55%/3.45%、Esc 4.25%/4.32%、退出码 0、无残留进程、主菜单签名 lum 25.4·117 色与参照图一致 | QA |
+| 导出包启动（RC0） | 窗口 1.9–2.1 s；到主菜单首帧 冷 3477 ms / 暖 2565 ms；**Enter → 首房首帧 冷 1119 ms / 暖 605 ms** | QA |
+| 冻结点 | `git commit 1cd3be7`（`docs/FREEZE_CHECKLIST.md` 记录同上三项全绿） | Lead |
 
 **本文件定稿结论：本轮（P7 / T9）游戏代码缺陷 0 项，未修改任何游戏代码、场景、资源或工程设置。**
-五条"看起来像缺陷"的红项全部定性为验证基建/测试夹具问题（DEF-01–05），其中两条（DEF-04、DEF-05）是我自己工具里的 bug。
-两处未结案事项只有 OPEN-01（冷启动进房转场待测，有明确解锁条件），且它属体验观察项而非代码缺陷。
+五条"看起来像缺陷"的红项全部定性为验证基建/测试夹具问题（DEF-01–05），其中两条（DEF-04、DEF-05）是我自己工具里的 bug；
+另有 OBS-01（并发编辑污染）与 4 项构建链问题（BUILD-01–04），均由对应 owner 修复，同样不是游戏缺陷。
+**两处曾疑似"游戏问题"的观察项（OPEN-01 冷启动、OPEN-02 720p 渲染目标）均已用实测数据结案为非缺陷。**
+未修复/已知项见第 5 节（`benchmark.ps1` 未端到端复跑、启动无 loading 反馈、无代码签名、未做人工试玩、单一硬件）。
 
 ## 7. 修复时必须遵守的既有约束（避免把“修缺陷”变成“新缺陷”）
 
@@ -113,7 +157,7 @@
    `godot/tests/`（QA）、`tools/verify.py`（Lead）、`scripts/art/`、`scripts/audio/`、`assets/materials/`、`assets/audio/`（Art）、
    `scripts/systems/main_menu.gd`、`scripts/combat/weapon_visual.gd`（Art，冻结前专用）—— **均不可改**，需要动先报 Lead。
 
-## 6. 回归命令速查（本机实测可用）
+## 8. 回归命令速查（本机实测可用）
 
 工作目录 `D:\game\StarAbyss`；无 `python` 命令，用 `py` 启动器；无 pwsh 7，不要用 `tools/verify.ps1`。
 

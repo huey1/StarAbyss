@@ -847,6 +847,73 @@ def verify_package(target: Path, godot: Path) -> int:
     return 0
 
 
+def write_package_hashes(paths: Paths) -> None:
+    """Recompute SHA256SUMS.txt over everything in the package directory."""
+    hash_lines = [f"{sha256_of(path)}  {path.name}"
+                  for path in sorted(paths.package_path.iterdir(), key=lambda item: item.name)
+                  if path.is_file() and path.name != "SHA256SUMS.txt"]
+    (paths.package_path / "SHA256SUMS.txt").write_text(
+        "\n".join(hash_lines) + "\n", encoding="utf-8")
+
+
+def write_release_zip(paths: Paths) -> None:
+    """Rebuild the distributable zip and its .sha256 sidecar from the package directory."""
+    if paths.zip.exists():
+        paths.zip.unlink()
+    with zipfile.ZipFile(paths.zip, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
+        for path in sorted(paths.package_path.iterdir()):
+            if path.is_file():
+                bundle.write(path, f"{PACKAGE_NAME}/{path.name}")
+    zip_hash = sha256_of(paths.zip)
+    paths.zip_hash.write_text(f"{zip_hash}  {paths.zip.name}\n", encoding="utf-8")
+    log(f"PASS: release package {paths.zip} ({paths.zip.stat().st_size:,} bytes)")
+    log(f"SHA256: {zip_hash}")
+
+
+def attest_native_input(paths: Paths, evidence: str, verified_by: str) -> int:
+    """Record a completed verification of the shipped artefacts in BUILD_INFO.json.
+
+    The build itself cannot know whether a human or an external harness exercised the
+    package, so it writes `false` and this command is the only way to record the truth
+    afterwards. It refuses to attest a package that is not a release candidate, never
+    touches StarAbyss.exe / StarAbyss.pck, and regenerates the hashes and the zip.
+    """
+    info_path = paths.package_path / "BUILD_INFO.json"
+    if not info_path.is_file():
+        raise BuildError(f"No BUILD_INFO.json in {paths.package_path}; build the package first.")
+    if not evidence.strip():
+        raise BuildError("--evidence must describe the actual verification performed.")
+    info = json.loads(info_path.read_text(encoding="utf-8"))
+    if not info.get("release_candidate_eligible"):
+        raise BuildError(
+            "Refusing to attest a package whose release_candidate_eligible is not true.")
+    before = {"exe": sha256_of(paths.exe), "pck": sha256_of(paths.pck)}
+    info["release_native_input_verified"] = True
+    info["release_native_input_evidence"] = evidence.strip()
+    info["human_playtest_verified"] = False
+    info["human_playtest_note"] = "无人工试玩记录；L4 为 OS 级注入输入的机械佐证，不等同人工验收"
+    info["verified_at_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    info["verified_by"] = verified_by
+    info_path.write_text(json.dumps(info, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    log(f"Attested native-input verification in {info_path}")
+    log(f"  verified_by: {verified_by}")
+    log(f"  verified_at_utc: {info['verified_at_utc']}")
+    log("  human_playtest_verified: false (unchanged on purpose)")
+
+    write_package_hashes(paths)
+    log(f"  SHA256SUMS.txt regenerated ({len(info)} BUILD_INFO fields)")
+    write_release_zip(paths)
+    after = {"exe": sha256_of(paths.exe), "pck": sha256_of(paths.pck)}
+    if before != after:
+        raise BuildError(
+            "Attestation changed StarAbyss.exe/pck, which must never happen: "
+            f"{before} -> {after}")
+    log("PASS: exe and pck are byte-identical to before the attestation")
+    log("  Next: py tools\\build_windows.py --verify-package "
+        f"{paths.zip}")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Star Abyss Windows x64 release build")
     parser.add_argument("--godot", default=os.environ.get("STARABYSS_GODOT", DEFAULT_GODOT),
@@ -858,6 +925,14 @@ def main() -> int:
     parser.add_argument("--verify-package", default="", metavar="ZIP_OR_DIR",
                         help="Unpack a built package into a fresh directory, launch it from "
                              "there and report the result (clean-room verification)")
+    parser.add_argument("--attest-native-input", action="store_true",
+                        help="Record a completed native-input verification in the built "
+                             "package's BUILD_INFO.json, then rebuild hashes and the zip")
+    parser.add_argument("--evidence", default="", metavar="TEXT",
+                        help="What was actually verified, for BUILD_INFO.json (required by "
+                             "--attest-native-input)")
+    parser.add_argument("--verified-by", default="", metavar="WHO",
+                        help="Who verified it, for BUILD_INFO.json")
     parser.add_argument("--force-templates", action="store_true",
                         help="Re-extract the template even if one is already installed")
     parser.add_argument("--clean", action="store_true",
@@ -885,6 +960,11 @@ def main() -> int:
         if args.verify_package:
             # Needs no editor: it launches the shipped executable, exactly like a player.
             return verify_package(Path(args.verify_package), godot)
+
+        if args.attest_native_input:
+            version_tag = project_version()
+            paths = Paths.from_root(Path(args.out).resolve(), version_tag)
+            return attest_native_input(paths, args.evidence, args.verified_by or "unspecified")
 
         if not godot.is_file():
             log(f"FATAL: Godot editor not found: {godot}")
@@ -1024,25 +1104,12 @@ def main() -> int:
 
         verify_package_contents(paths)
 
-        hash_lines = [f"{sha256_of(path)}  {path.name}"
-                      for path in sorted(paths.package_path.iterdir(), key=lambda item: item.name)
-                      if path.is_file() and path.name != "SHA256SUMS.txt"]
-        (paths.package_path / "SHA256SUMS.txt").write_text(
-            "\n".join(hash_lines) + "\n", encoding="utf-8")
+        write_package_hashes(paths)
 
         if args.no_zip:
             log("SKIP: zip archive (--no-zip)")
         else:
-            if paths.zip.exists():
-                paths.zip.unlink()
-            with zipfile.ZipFile(paths.zip, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as bundle:
-                for path in sorted(paths.package_path.iterdir()):
-                    if path.is_file():
-                        bundle.write(path, f"{PACKAGE_NAME}/{path.name}")
-            zip_hash = sha256_of(paths.zip)
-            paths.zip_hash.write_text(f"{zip_hash}  {paths.zip.name}\n", encoding="utf-8")
-            log(f"PASS: release package {paths.zip} ({paths.zip.stat().st_size:,} bytes)")
-            log(f"SHA256: {zip_hash}")
+            write_release_zip(paths)
 
         log("")
         log(f"Output directory: {paths.package_path}")

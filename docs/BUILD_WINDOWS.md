@@ -116,6 +116,17 @@ Get-Process Godot*,StarAbyss* -ErrorAction SilentlyContinue   # 必须先为空
 
 与 `tools/verify.py` 的区别：测试运行器为了隔离同样把 `APPDATA`/`LOCALAPPDATA` 重定向进 `.local/`，但它不导出，因此不需要模板。
 
+> **这个重定向会改变"启动性能"的语义（写报告时必须说明）**
+> `user://` 落在被重定向的 `APPDATA` 里，而本环境禁止引擎写真实 `%APPDATA%`，所以**着色器缓存无法持久化**：
+> ```text
+> ERROR: Could not create directory: 'user://vulkan'.
+> ERROR: Can't create shader cache folder, no shader caching will happen: user://
+> ```
+> 这两行是**环境限制，不是游戏缺陷**，且它们属于第 4 节白名单之外的 ERROR——若在验收时看到，应判断为
+> "本机无法写用户目录"的已知后果，而非产物问题。
+> 后果：**本机上每次启动都相当于冷启动**，测量到的启动时间是**上界**；正常机器暖启动更快。
+> 引用启动耗时数据时必须带上这句限定，否则会低估真实玩家体验、也会冤枉游戏。
+
 ## 2. 构建
 
 项目根目录（`D:\game\StarAbyss`）：
@@ -130,7 +141,15 @@ py tools\build_windows.py --out D:\tmp\b   # 换输出根目录
 py tools\build_windows.py --godot <path>   # 指定同版本引擎
 py tools\build_windows.py --verify-package builds\windows\star_abyss_1.0.0_windows_x64.zip
                                            # 干净目录验证：解压到全新目录、从那里启动（见 3.3）
+py tools\build_windows.py --attest-native-input --verified-by "<谁>" --evidence "<验了什么>"
+                                           # 把已完成的原生输入验证写进包内 BUILD_INFO.json，
+                                           # 并重算 SHA256SUMS.txt / 重建 zip（exe/pck 不变，脚本自检）
 ```
+
+**为什么背书要单独一条命令**：构建流水线**无法知道**包是否被真人或外部脚本验证过，所以它只写
+`release_native_input_verified: false`——这是诚实的。事后用 `--attest-native-input` 记录事实，且该命令会
+拒绝为 `release_candidate_eligible != true` 的包背书、并在改完后断言 `StarAbyss.exe`/`StarAbyss.pck`
+哈希未变（背书只允许改元数据，绝不允许改产物）。
 
 **`--clean` 的语义（重要，来自一次真实事故）**：它不会删除任何东西，而是把这 9 个自有产物**移动**到
 `.local/export-diagnostics/previous_build/<YYYYmmdd-HHMMSS>/`。原因：2026-10-23 曾出现
@@ -341,4 +360,27 @@ exe，导出的 exe 就是模板可执行文件的**逐字节复制**（可自�
 | 源码指纹 | 导出前后一致（6 个区域：scripts/scenes/resources/assets/project.godot/export_presets.cfg） |
 
 **RC0 的定位**：这次构建只用于证明"模板 → 导出 → 门禁 → 启动"链路可用，**不是发布候选**（当时美术仍在改 VFX）。
-发布候选（RC1）必须在源码冻结后重建，并在本表下方追加一行对照。
+发布候选（RC1）必须在源码冻结后重建，并在下表追加对照。
+
+### 2026-10-23 RC0 / RC1 对照（可复现性证据）
+
+冻结点 `git commit 1cd3be7`（`git status` 干净）之后构建 RC1，命令完全相同：
+`py tools\build_windows.py --clean --wait-for-exclusive 900`
+
+| 产物 | RC0（13:08） | RC1（13:22，冻结点 1cd3be7） | 是否相同 |
+| --- | --- | --- | --- |
+| `StarAbyss.exe` | 109,268,480 B<br>`d34d36f3…0562` | 109,268,480 B<br>`d34d36f3…0562` | **相同**（= 官方模板逐字节复制，见第 7 节） |
+| `StarAbyss.pck` | 3,166,556 B<br>`32e8588b…9f0a` | 3,166,556 B<br>`32e8588b…9f0a` | **相同** |
+| zip | 40,912,697 B<br>`a975e5fd…449a` | 40,912,735 B<br>`80bbf169…760c` | **不同（预期）** |
+| `BUILD_INFO.json` | 991 B | 1,182 B | 不同（RC1 增加了 `version`/`release_start_cwd`/`release_start_exe`/`source_tree_stable_during_build`/`release_candidate_eligible`/`pack_audit_verified` 字段） |
+
+**结论：游戏内容可复现。** exe 与 pck 字节级一致，说明源码在两次构建之间没有实质变化（与冻结点 git 干净一致）；zip 之所以不同，是因为它内嵌的 `BUILD_INFO.json` 增加了上面这些字段、且 `built_at_utc` 时间戳不同——**zip 的差异来自元数据，不来自游戏内容**。校验"内容是否相同"必须比 `pck_sha256`，不要比 zip 或 exe 的哈希。
+
+RC1 的干净目录验证（`--verify-package`，从 zip 解压到全新目录再启动）：
+```
+PASS: 6 file hash(es) match SHA256SUMS.txt
+PASS: clean-room launch from .local\export-diagnostics\cleanroom\20261023-132234\star_abyss_windows_x64 (exit 0, Forward+, no script errors)
+$env:... 日志：Godot Engine v4.7.2.stable.official.ed1daf0bf / Vulkan 1.4.325 - Forward+ - Using Device #0: NVIDIA GeForce RTX 3050
+```
+
+**`previous_build/` 的清理**：`--clean` 把旧产物移进 `.local/export-diagnostics/previous_build/<时间戳>/`，每次约 153 MB，脚本**不会自动删除**。需要腾空间时请**手动**清理该目录（它被 `.gitignore` 忽略、不参与发布）。
