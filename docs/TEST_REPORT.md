@@ -332,6 +332,19 @@ L4 明细（RC1，暖缓存）：`WINDOW HANDLE 1924 ms` / `启动→主菜单 2
 > ```
 > **注**：该加固是在本次背书**之后**完成的，**未改变任何已发布哈希**（zip 仍为 40,913,090 B / `dd9dda5e…`），只影响后续背书行为。
 
+**我（QA）对发布 zip 的独立审计**（不依赖 release 的自述）：解压前直接读 zip 内的 7 个成员，用自己算的 sha256 逐条比对 `SHA256SUMS.txt`：
+
+| 检查 | 结果 |
+| --- | --- |
+| `SHA256SUMS.txt` 的 6 条记录 vs 我算的实际字节 | **6/6 全对，0 不符** |
+| `BUILD_INFO.json` 记录的 `exe_sha256`/`pck_sha256` vs zip 内实际字节 | **`True` / `True`** |
+| `release_native_input_verified` / `human_playtest_verified` | **`True` / `False`**（两个标志分开，符合定稿口径） |
+| `human_playtest_note` 内容 | `无人工试玩记录；L4 为 OS 级注入输入的机械佐证，不等同人工验收` —— **UTF-8 合法，无替换字符** |
+| zip 成员名编码 | 唯一的非 ASCII 成员 `试用说明.txt` 正确置了 **UTF-8 标志位 `0x800`**，其余为 ASCII |
+| 证据串是否含我实测的数字 | 含（`94.79%/3.20%/4.29%`、`exit code 0`、`0 leftover processes`、`client 1280x720`、`pack_audit 75/0 and export-smoke 15/15`） |
+
+> **一次自我纠错（诚实记录）**：我最初用 `Get-Content -Raw` 读 `BUILD_INFO.json` 时看到中文是 `鏃犱汉宸ヨ瘯…`，**一度怀疑发布包元数据乱码**。经 Python 以 UTF-8 解码 + 写文件再读确认：**文件本身完全正确，乱码是我终端把 UTF-8 当 GBK 显示**。**没有把这个假缺陷报出去**（先证伪再报告）。该陷阱已写入 `TESTING.md` 环境约束第 11 条。审计原始输出：`.local/validation/zip_audit_utf8.txt`。
+
 ---
 
 ## 7. 断言总数核算：与 README「544 项断言」的独立核对

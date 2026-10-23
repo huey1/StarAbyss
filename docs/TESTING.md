@@ -65,6 +65,8 @@ $env:LOCALAPPDATA='D:\game\StarAbyss\.local\localappdata'
 9. **PowerShell 5.1 会把原生命令的 stderr 当致命错误**：引擎只要往 stderr 打一行（连 `Failed to read the root certificate store.` 这种无害信息也算），在 `$ErrorActionPreference='Stop'` 下就会抛 `NativeCommandError` **直接终止整个脚本**（实测让一轮性能采样只跑完 1/4 且没写出 JSON）。采集脚本请把 `2>&1 | ForEach-Object { "$_" }` 归并输出，或临时把 `$ErrorActionPreference` 设为 `'Continue'`。写脚本前**先用 `[System.Management.Automation.Language.Parser]::ParseFile()` 静态查语法**，不必开窗口就能验。
 10. **窗口占用要有显式握手**：多 Agent 并发时，"我占了（从 HH:MM:SS 起 N 秒）"→"我放了"两条消息必须都发。曾发生过两个 Agent 在同一秒各自启动，导致双方读数都不可信（并且有人为腾窗口杀错了进程）。
 
+11. **PowerShell 5.1 读 UTF-8 中文文件会显示成乱码（不是文件坏了）**：`Get-Content x.json` 默认按 ANSI/GBK 解码，于是 `无人工试玩记录；…` 显示成 `鏃犱汉宸ヨ瘯鐜╄褰曪紱…`。**本环境极易因此误报"发布包元数据乱码"这类假缺陷**（我差点报了）。核验方法（按可信度排序）：① 用 `read` 工具打开；② `Get-Content -Encoding UTF8`；③ **最稳**：用 Python 以 `utf-8` 解码并**写到文件再读**——把中文直接 `print` 到 PowerShell 控制台同样会花屏（控制台代码页问题，与文件无关）。判定"文件是否真坏"的硬指标：`utf-8` 解码成功、无 `U+FFFD` 替换字符、CJK 码点数 > 0 —— **三者同时成立即文件本身正确**。
+
 ### 4. 用例清单与当前结果
 
 **L1 headless（12 项，`--headless-only`；实测 501 断言、0 失败）**

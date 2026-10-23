@@ -387,7 +387,8 @@ DIFF before vs after_start_settled: mean 111.12  changed 93.9%  identical=False
 
 ### release-integrator（发布/集成）
 `tools/build_windows.py`（728 行流水线：独占检查 → 预设校验 → 版本双证据 → 40 脚本语法闸门 →
-导出 → 双包门禁 → 源码树指纹 → 打包 → 干净目录验证）、`godot/export_presets.cfg`、
+导出 → 双包门禁 → 源码树指纹 → 打包 → 干净目录验证；另含 `--verify-package` 与 `--attest-native-input` 两个模式）、
+`tools/inspect_pck.py`（离线解析 PCK 索引）、`godot/export_presets.cfg`、
 `docs/BUILD_WINDOWS.md`（26.6 KB）、`docs/RELEASE.md`、`README.md`、`builds/` 全部产物、
 导出模板安装（官方 tpz 1,281,349,702 字节，35 条目，`testzip()=None`）。
 
