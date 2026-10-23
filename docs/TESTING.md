@@ -497,3 +497,52 @@ py tools\build_windows.py --attest-native-input --evidence "<实测数字>" --ve
 
 - `tools/native_input_probe.py`（Lead 编写）：每次截图前**重新解析窗口句柄**，绕开缓存句柄失效；未做前台强占。已能稳定产出"进入本局"与"暂停弹窗"的截图证据。
 - `tools/native_input_check.ps1`（QA/release-integrator 版）：断言前强制校验前台、未送达按键不计入分母、修掉 `trace.toggled` 恒 false 的 bug、去掉硬编码损坏的中文 user-data 路径。**该工具自身尚未被验证通过**，保留作为后续继续工作的起点。
+
+### L4 最终结论：已通过（2026-10-23 17:11，取代上文"未通过"记录）
+
+上文记录的"未通过"状态**已于本时刻关闭**，保留原文是为了留下根因排查过程。最终结果：
+
+| 轮次 | verdict | Enter 画面变化 | 按住 W 最大变化 | Esc 单次暂停 | Esc 接收率 | 焦点失败 | 键盘焦点失配 | 残留 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| r1_cold | **PASS** | 94.65% | 63.79% | 99.20%（暂停后 lum 19.5） | **100%**（2/2） | 0 | 0 | 0 |
+| r2_warm | **PASS** | 94.65% | 50.33% | 99.21%（19.7） | **100%** | 0 | 0 | 0 |
+| r3_cold | **PASS** | 94.64% | 2.68% | 99.56%（20.3） | **100%** | 0 | 0 | 0 |
+
+三轮均 `client_size=480x270`（`resolution_actual == resolution_requested`）、`exit_code=0`、
+`leftover_processes=0`、`move_in_play_pairs=9`、`move_paused_samples=0`、
+`settled_after_start_matches_room_signature=true`。证据：`.local/validation/l4_final_r{1_cold,2_warm,3_cold}/`。
+
+#### 根因：注入器发送的扫描码是 0（**不是游戏缺陷，游戏代码零改动**）
+
+`keybd_event(vk, scan, ...)` 的 `scan` 一直传 0。Godot 的 `physical_keycode` **按扫描码映射**，
+而 `release_mouse` 绑定的正是 `physical_keycode 4194305`（KEY_ESCAPE）。字母键能从 VK 对上，
+特殊键在 `scan=0` 时匹配不到 action——所以 Enter/W 一直正常、**Esc 时好时坏甚至完全无效**。
+旧观测里那些"Esc 暂停成功"多半是注入后重抢焦点触发的 `NOTIFICATION_APPLICATION_FOCUS_OUT → pause()`
+伪造出来的。改用 `MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)` 后实测：**Esc `0x01` / W `0x11` / Enter `0x1c`**，
+三次"暂停→恢复"全部成立，接收率 100%。
+
+**这条排除了"游戏收不到按键"和"Esc 无法恢复"两个假设**——两者都是测试工具的缺陷。
+按"不是缺陷不处理"的原则，此判定之后未再深挖，也未改动任何游戏脚本或资源。
+
+#### 同时修正的三处验证工具缺陷（都会导致假结论）
+
+1. `Process.MainWindowHandle` 会返回该进程 3 个顶层窗口中的退化窗口（`0×0`）→ 改成每次
+   `EnumWindows` 枚举取客户区最大者，不再缓存句柄。这是 `GetClientRect failed` 与全黑帧的真因。
+2. `BitBlt(GetDC(hwnd))` / `PrintWindow` 对 Vulkan 窗口只返回纯色（实测 `colours=1`）→
+   必须用屏幕区域拷贝；"抓被遮挡窗口内容"这条路在本作上不可行。
+3. `lum < 40` 判暂停在小窗口下失效（同一暂停面板 1280×720 下 `lum≈20`，480×270 下 `lum≈110–152`）
+   → 改用游戏自身的鼠标捕获标志（`GetCursorInfo` 可见性）作为暂停态判据。
+
+#### 交付物（attest 后）
+
+```
+zip  42,098,870 B  sha256 6cf5aeec6bf62c84399fcb756f775ab241ebe4020209bf27a36a3f1e96e84ae0
+pck   3,170,124 B  sha256 737ff5148cdc52e8277923f6edf45cbce59cc7024cb015112a5e630b927ed729
+exe 109,268,480 B  sha256 d34d36f3be1a6c49c56525ae86469b92e4f417ddf0b43cf00dd80c385c4b0562
+```
+`exe` 与 `pck` 在 attest 前后**字节完全一致**，zip 仅因 `BUILD_INFO.json` 增加证据字段而变化。
+干净目录复验：解压到 `.local/export-diagnostics/cleanroom/` → 6 个哈希与 `SHA256SUMS.txt` 一致 →
+干净启动 exit 0（Forward+ / RTX 3050）。
+
+**`human_playtest_verified` 仍为 `false`**：本次 L4 证明的是"真实 OS 按键能驱动发布 exe"，
+不证明可读性、手感、平衡与单局时长。

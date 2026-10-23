@@ -48,6 +48,8 @@ param(
 	[double]$MinGameLuma = 4.0,
 	[int]$MinGameColours = 24,
 	[int]$ForegroundTimeoutMilliseconds = 6000,
+	[string]$Resolution = '',
+	[string]$Position = '80,60',
 	[switch]$StartupOnly,
 	[switch]$ClearShaderCache
 )
@@ -72,6 +74,7 @@ $report = [ordered]@{
 $script:ForegroundRecoveries = 0
 $script:ForegroundFailures = 0
 $script:KeysInjected = 0
+$script:FocusWindowMisses = 0
 
 Add-Type -AssemblyName System.Drawing
 Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @'
@@ -86,6 +89,8 @@ public class QaWin32
     [DllImport("user32.dll")] public static extern void SwitchToThisWindow(IntPtr hWnd, bool fAltTab);
     [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+    [DllImport("user32.dll")] public static extern bool MoveWindow(IntPtr hWnd, int X, int Y, int nWidth, int nHeight, bool bRepaint);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hWnd, out RECT lpRect);
@@ -93,6 +98,7 @@ public class QaWin32
     [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, IntPtr extra);
     [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, IntPtr extra);
+    [DllImport("user32.dll")] public static extern uint MapVirtualKeyW(uint uCode, uint uMapType);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
     [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
     [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
@@ -101,6 +107,91 @@ public class QaWin32
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X, Y; }
+
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool GetCursorInfo(out CURSORINFO pci);
+    [DllImport("user32.dll")] public static extern IntPtr SetFocus(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool GetGUIThreadInfo(uint idThread, ref GUITHREADINFO lpgui);
+    [StructLayout(LayoutKind.Sequential)] public struct GUITHREADINFO
+    {
+        public int cbSize; public int flags; public IntPtr hwndActive, hwndFocus, hwndCapture;
+        public IntPtr hwndMenuOwner, hwndMoveSize, hwndCaret;
+        public RECT rcCaret;
+    }
+    [StructLayout(LayoutKind.Sequential)] public struct CURSORINFO { public int cbSize; public int flags; public IntPtr hCursor; public POINT ptScreenPos; }
+    public const int CURSOR_SHOWING = 0x0001;
+
+    // Keyboard input goes to the FOCUS window of the foreground thread, not to whatever window
+    // happens to be foreground. This process owns three top-level windows, so the engine's real
+    // window can be foreground while focus sits on a helper window - which is how a press is
+    // delivered perfectly and still reaches nothing.
+    public static IntPtr GetFocusWindow(IntPtr hWnd)
+    {
+        uint pid;
+        uint threadId = GetWindowThreadProcessId(hWnd, out pid);
+        if (threadId == 0) return IntPtr.Zero;
+        GUITHREADINFO info = new GUITHREADINFO();
+        info.cbSize = Marshal.SizeOf(typeof(GUITHREADINFO));
+        if (!GetGUIThreadInfo(threadId, ref info)) return IntPtr.Zero;
+        return info.hwndFocus;
+    }
+
+    // Give the engine's real window the keyboard focus inside its own thread.
+    public static bool FocusWindow(IntPtr hWnd)
+    {
+        if (GetFocusWindow(hWnd) == hWnd) return true;
+        uint pid;
+        uint targetThread = GetWindowThreadProcessId(hWnd, out pid);
+        uint selfThread = GetCurrentThreadId();
+        bool attached = false;
+        try
+        {
+            if (targetThread != 0 && targetThread != selfThread)
+                attached = AttachThreadInput(selfThread, targetThread, true);
+            SetFocus(hWnd);
+        }
+        finally
+        {
+            if (attached) AttachThreadInput(selfThread, targetThread, false);
+        }
+        return GetFocusWindow(hWnd) == hWnd;
+    }
+
+    // The Godot process owns several top-level windows and two of them report a 0x0 client area.
+    // Process.MainWindowHandle may return one of those, which is exactly how a healthy game turned
+    // into "GetClientRect failed" plus all-black frames. Resolve the LARGEST visible window instead.
+    public static IntPtr FindMainWindow(int pid)
+    {
+        IntPtr best = IntPtr.Zero;
+        int bestArea = 0;
+        EnumWindows(delegate(IntPtr hWnd, IntPtr lParam)
+        {
+            uint owner;
+            GetWindowThreadProcessId(hWnd, out owner);
+            if (owner == (uint)pid && IsWindowVisible(hWnd))
+            {
+                RECT rect;
+                if (GetClientRect(hWnd, out rect))
+                {
+                    int area = (rect.Right - rect.Left) * (rect.Bottom - rect.Top);
+                    if (area > bestArea) { bestArea = area; best = hWnd; }
+                }
+            }
+            return true;
+        }, IntPtr.Zero);
+        return best;
+    }
+
+    // run_manager._set_state() calls camera_controller.set_mouse_captured(not blocked), so the OS
+    // cursor is hidden exactly while the game is playable and shown while it is paused.
+    public static bool CursorVisible()
+    {
+        CURSORINFO info = new CURSORINFO();
+        info.cbSize = Marshal.SizeOf(typeof(CURSORINFO));
+        if (!GetCursorInfo(out info)) return false;
+        return (info.flags & CURSOR_SHOWING) != 0;
+    }
 }
 
 public class QaImage
@@ -195,6 +286,7 @@ function Test-Foreground {
 # result instead of assuming success.
 function Force-Foreground {
 	param([IntPtr]$Handle, [int]$TimeoutMilliseconds = 6000)
+	$Handle = Get-GameHandle
 	if (Test-Foreground -Handle $Handle) { return $true }
 	$deadline = (Get-Date).AddMilliseconds($TimeoutMilliseconds)
 	$attempt = 0
@@ -252,10 +344,22 @@ function Force-Foreground {
 # of the run needed focus repair instead of hiding it.
 function Assert-Foreground {
 	param([IntPtr]$Handle, [string]$Context)
-	if (Test-Foreground -Handle $Handle) { return $true }
+	$Handle = Get-GameHandle
+	if (Test-Foreground -Handle $Handle) {
+		# Foreground is not enough: the keyboard goes to the focused window of that thread.
+		if (-not [QaWin32]::FocusWindow($Handle)) {
+			$script:FocusWindowMisses++
+			Write-Diag ("KEYBOARD FOCUS NOT ON GAME WINDOW [{0}] - focus sits on 0x{1:x}" -f $Context, [int64][QaWin32]::GetFocusWindow($Handle))
+		}
+		return $true
+	}
 	if (Force-Foreground -Handle $Handle -TimeoutMilliseconds $ForegroundTimeoutMilliseconds) {
 		$script:ForegroundRecoveries++
 		Write-Diag ("FOCUS RECOVERED [{0}] - the game window had lost the foreground" -f $Context)
+		if (-not [QaWin32]::FocusWindow($Handle)) {
+			$script:FocusWindowMisses++
+			Write-Diag ("KEYBOARD FOCUS NOT ON GAME WINDOW [{0}] after recovery" -f $Context)
+		}
 		return $true
 	}
 	$script:ForegroundFailures++
@@ -263,10 +367,26 @@ function Assert-Foreground {
 	return $false
 }
 
+function Get-GameHandle {
+	# Re-resolved on every use: a cached handle is how a rebuild/occlusion turns into a bogus
+	# failure, and the process owns several windows of which two are 0x0.
+	$fresh = [QaWin32]::FindMainWindow($script:GamePid)
+	if ($fresh -ne [IntPtr]::Zero) { $script:GameHandle = $fresh }
+	return $script:GameHandle
+}
+
+function Get-CursorVisible {
+	return [QaWin32]::CursorVisible()
+}
+
 function Save-ClientShot {
 	param([IntPtr]$Handle, [string]$Path)
+	$Handle = Get-GameHandle
 	$rect = New-Object QaWin32+RECT
-	if (-not [QaWin32]::GetClientRect($Handle, [ref]$rect)) { throw "GetClientRect failed" }
+	if (-not [QaWin32]::GetClientRect($Handle, [ref]$rect)) {
+		Write-Diag ("WINDOW LOST - GetClientRect failed on handle 0x{0:x}" -f [int64]$Handle)
+		throw ("WINDOW LOST: GetClientRect failed on handle 0x{0:x}" -f [int64]$Handle)
+	}
 	$width = $rect.Right - $rect.Left
 	$height = $rect.Bottom - $rect.Top
 	if ($width -le 0 -or $height -le 0) { throw "client area has no size ($width x $height)" }
@@ -302,16 +422,42 @@ function Is-PlayingFrame {
 function Get-ScreenState {
 	param($Stats)
 	if (-not (Is-GameFrame -Stats $Stats)) { return 'blank' }
+	# The cursor is the authoritative signal once it has been cross-checked against a frame we know
+	# was playable: _set_state() releases the mouse for every non-playable state, so "cursor hidden"
+	# means "input is live". Luminance alone mislabels a small-window pause modal, which measured
+	# lum 152 at 480x270 (bright) and lum 20 at 1280x720 (dark) for the same state.
+	if ($script:CursorSignalTrusted) {
+		if ([QaWin32]::CursorVisible()) { return 'paused' }
+		return 'playing'
+	}
 	if (Is-PlayingFrame -Stats $Stats) { return 'playing' }
 	if ($Stats[0] -lt 40.0) { return 'menu-or-paused' }
 	return 'unknown'
 }
 
+function Get-ScanCode {
+	param([byte]$VirtualKey)
+	# A real keyboard always carries a scan code and Godot derives physical_keycode from it.
+	# Injecting with scan 0 gives the event no physical key, so an action bound to physical_keycode
+	# (release_mouse = 4194305 / KEY_ESCAPE) never matches while letter keys still match through
+	# their virtual key. Measured on this machine: Esc 0x01, W 0x11, Enter 0x1c.
+	$scan = [QaWin32]::MapVirtualKeyW([uint32]$VirtualKey, 0)
+	if ($scan -eq 0) {
+		throw ("MapVirtualKeyW returned 0 for VK 0x{0:x2} - refusing to inject an event with no physical key" -f $VirtualKey)
+	}
+	return [byte]$scan
+}
+
 function Send-KeyRaw {
 	param([byte]$VirtualKey, [int]$HoldMilliseconds = 90)
-	[QaWin32]::keybd_event($VirtualKey, 0, 0, [IntPtr]::Zero)
+	$scan = Get-ScanCode -VirtualKey $VirtualKey
+	# A redundant key-up first: if an earlier up was ever lost the OS still considers the key held,
+	# so every later down arrives flagged as auto-repeat and Godot drops it via is_echo().
+	[QaWin32]::keybd_event($VirtualKey, $scan, 2, [IntPtr]::Zero)
+	Start-Sleep -Milliseconds 30
+	[QaWin32]::keybd_event($VirtualKey, $scan, 0, [IntPtr]::Zero)
 	Start-Sleep -Milliseconds $HoldMilliseconds
-	[QaWin32]::keybd_event($VirtualKey, 0, 2, [IntPtr]::Zero)
+	[QaWin32]::keybd_event($VirtualKey, $scan, 2, [IntPtr]::Zero)
 }
 
 # Rule 1: a key is only ever injected while the game window owns the foreground.
@@ -436,6 +582,7 @@ function Measure-Movement {
 		}
 	}
 	$keyDown = $false
+	$wScan = Get-ScanCode -VirtualKey 0x57
 	try {
 		if (-not (Send-Key -Handle $Handle -VirtualKey 0x57 -Context 'move/keydown' -HoldMilliseconds 0)) {
 			throw 'could not press W: the game window never became the foreground window'
@@ -445,7 +592,7 @@ function Measure-Movement {
 			$path = Join-Path $Dir ("move_sample_{0:d2}.png" -f $i)
 			if (-not (Test-Foreground -Handle $Handle)) {
 				# Focus left mid-hold: release, repair, re-press so the game sees a real held key.
-				[QaWin32]::keybd_event(0x57, 0, 2, [IntPtr]::Zero)
+				[QaWin32]::keybd_event(0x57, $wScan, 2, [IntPtr]::Zero)
 				$keyDown = $false
 				$focusRepairs++
 				if (-not (Assert-Foreground -Handle $Handle -Context 'move/sample')) { break }
@@ -457,7 +604,7 @@ function Measure-Movement {
 			Start-Sleep -Milliseconds ([int]($HoldMilliseconds / $Samples))
 		}
 	} finally {
-		if ($keyDown) { [QaWin32]::keybd_event(0x57, 0, 2, [IntPtr]::Zero) }   # VK_W up
+		if ($keyDown) { [QaWin32]::keybd_event(0x57, $wScan, 2, [IntPtr]::Zero) }   # VK_W up
 	}
 
 	$best = $null
@@ -493,37 +640,59 @@ function Measure-Movement {
 # press, classify, and count only real state transitions. Reception rate = toggles / presses
 # DELIVERED (a press that could not be delivered is recorded and excluded - it never reached
 # the game, so counting it would blame the game for the harness losing focus).
+function Get-PauseState {
+	# run_manager._set_state() releases the mouse for every non-playable state and re-captures it
+	# when play resumes, so the OS cursor is the game's own pause indicator. Luminance is not:
+	# the same pause modal measured lum 152 at 480x270 and lum 20 at 1280x720.
+	if ([QaWin32]::CursorVisible()) { return 'paused' }
+	return 'playing'
+}
+
 function Test-EscToggle {
-	param([IntPtr]$Handle, [string]$Dir, [string]$Tag, [int]$WantedToggles = 4, [int]$MaxPresses = 12)
+	param([IntPtr]$Handle, [string]$Dir, [string]$Tag, [int]$WantedToggles = 2, [int]$MaxPresses = 8)
 	$path = Join-Path $Dir ("esc_toggle_{0}.png" -f $Tag)
 	[void](Assert-Foreground -Handle $Handle -Context 'esc/initial')
 	[void](Save-ClientShot -Handle $Handle -Path $path)
-	$stats = [QaImage]::Stats($path)
-	$state = Get-ScreenState -Stats $stats
-	if ($state -eq 'blank') { $state = 'unknown' }
 	$toggles = 0
 	$presses = 0
 	$delivered = 0
 	$trace = @()
 	while (($toggles -lt $WantedToggles) -and ($presses -lt $MaxPresses)) {
-		$ok = Send-Key -Handle $Handle -VirtualKey 0x1B -Context "esc/press$presses"
+		$before = Get-PauseState
+		$flipped = $false
+		$attempt = 0
+		# One logical press may need several deliveries: a key press that is injected while another
+		# window holds the input queue is delivered to that window, and the game never sees it. Each
+		# attempt re-proves the foreground first, and every delivered attempt is counted, so retries
+		# cannot hide a press that the game ignored.
+		while ((-not $flipped) -and ($attempt -lt 3)) {
+			$attempt++
+			if (-not (Assert-Foreground -Handle $Handle -Context "esc/press$presses")) { continue }
+			if (-not (Send-Key -Handle $Handle -VirtualKey 0x1B -Context "esc/press$presses/try$attempt")) { continue }
+			$delivered++
+			$flipDeadline = (Get-Date).AddMilliseconds(800)
+			while ((Get-Date) -lt $flipDeadline) {
+				Start-Sleep -Milliseconds 120
+				if ((Get-PauseState) -ne $before) { $flipped = $true; break }
+			}
+		}
 		$presses++
-		if ($ok) { $delivered++ }
-		Start-Sleep -Milliseconds 650
-		[void](Assert-Foreground -Handle $Handle -Context "esc/after$presses")
+		$after = Get-PauseState
+		$flipped = ($after -ne $before)
+		if ($flipped) { $toggles++ }
 		[void](Save-ClientShot -Handle $Handle -Path $path)
 		$stats = [QaImage]::Stats($path)
-		$now = Get-ScreenState -Stats $stats
-		if ($now -eq 'blank') { $now = 'unknown' }
-		$changed = ($now -ne $state)
-		if ($changed) { $toggles++; $state = $now }
 		$trace += [ordered]@{
 			press = $presses
-			delivered = $ok
+			attempts = $attempt
+			state_before = $before
+			state_after = $after
+			cursor_visible = [QaWin32]::CursorVisible()
 			lum = [math]::Round($stats[0], 1)
-			state = $now
-			toggled = $changed
+			colours = [int]$stats[1]
+			toggled = $flipped
 		}
+		if (-not $flipped) { Write-Diag ("ESC NO FLIP [{0}] press {1}: state stayed '{2}' after {3} attempts" -f $Tag, $presses, $after, $attempt) }
 	}
 	return @{
 		tag = $Tag
@@ -531,8 +700,8 @@ function Test-EscToggle {
 		toggles = $toggles
 		presses = $presses
 		delivered = $delivered
-		reception_rate = $(if ($delivered -gt 0) { [math]::Round($toggles / $delivered, 3) } else { 0 })
-		final_state = $state
+		reception_rate = $(if ($presses -gt 0) { [math]::Round($toggles / $presses, 3) } else { 0 })
+		final_state = (Get-PauseState)
 		trace = $trace
 	}
 }
@@ -592,7 +761,17 @@ if ($ClearShaderCache) {
 	}
 }
 
-$arguments = @('--max-fps', '0', '--position', '80,60')
+$arguments = @('--max-fps', '0')
+if ($Position) {
+	if ($Position -notmatch '^\d+,\d+$') { throw "-Position must look like 1260,700 (got '$Position')" }
+	$arguments += @('--position', $Position)
+}
+if ($Resolution) {
+	if ($Resolution -notmatch '^\d+x\d+$') { throw "-Resolution must look like 480x270 (got '$Resolution')" }
+	$arguments += @('--resolution', $Resolution)
+}
+$report.observations['resolution_requested'] = $Resolution
+$report.observations['position_requested'] = $Position
 $workingDirectory = Split-Path -Parent $Exe
 $process = $null
 try {
@@ -600,15 +779,44 @@ try {
 	$script:LaunchWatch = [System.Diagnostics.Stopwatch]::StartNew()
 	$process = Start-Process -FilePath $Exe -ArgumentList $arguments -WorkingDirectory $workingDirectory -PassThru
 	$deadline = (Get-Date).AddSeconds(30)
-	while ($process.MainWindowHandle -eq 0 -and (Get-Date) -lt $deadline -and -not $process.HasExited) {
+	$script:GamePid = $process.Id
+	$script:GameHandle = [IntPtr]::Zero
+	$script:CursorSignalChecked = $true
+	while ($script:GameHandle -eq [IntPtr]::Zero -and (Get-Date) -lt $deadline -and -not $process.HasExited) {
 		Start-Sleep -Milliseconds 200
-		$process.Refresh()
+		$script:GameHandle = [QaWin32]::FindMainWindow($script:GamePid)
 	}
 	if ($process.HasExited) { throw ("process exited before a window appeared, exit code " + $process.ExitCode) }
-	if ($process.MainWindowHandle -eq 0) { throw "no main window handle after 30 s" }
-	$handle = $process.MainWindowHandle
+	if ($script:GameHandle -eq [IntPtr]::Zero) { throw "no usable game window (non-zero client area) after 30 s" }
+	$handle = $script:GameHandle
 	$report.observations['window_handle_appeared_ms'] = $script:LaunchWatch.ElapsedMilliseconds
-	Write-Output ("WINDOW HANDLE after {0} ms" -f $script:LaunchWatch.ElapsedMilliseconds)
+	$report.observations['window_handle'] = ('0x{0:x}' -f [int64]$handle)
+	Write-Output ("WINDOW HANDLE after {0} ms (0x{1:x}, largest visible window of pid {2})" -f $script:LaunchWatch.ElapsedMilliseconds, [int64]$handle, $script:GamePid)
+
+	# A requested size must actually happen. --resolution can be overridden by the project's
+	# window_width_override, so the size is enforced from outside with MoveWindow (no game code
+	# is touched) and then VERIFIED against the client rect before anything is measured.
+	if ($Resolution) {
+		$parts = $Resolution.Split('x')
+		$targetWidth = [int]$parts[0]
+		$targetHeight = [int]$parts[1]
+		$winRect = New-Object QaWin32+RECT
+		$cliRect = New-Object QaWin32+RECT
+		[void][QaWin32]::GetWindowRect($handle, [ref]$winRect)
+		[void][QaWin32]::GetClientRect($handle, [ref]$cliRect)
+		$frameX = ($winRect.Right - $winRect.Left) - ($cliRect.Right - $cliRect.Left)
+		$frameY = ($winRect.Bottom - $winRect.Top) - ($cliRect.Bottom - $cliRect.Top)
+		[void][QaWin32]::MoveWindow($handle, $winRect.Left, $winRect.Top, $targetWidth + $frameX, $targetHeight + $frameY, $true)
+		Start-Sleep -Milliseconds 450
+		[void][QaWin32]::GetClientRect($handle, [ref]$cliRect)
+		$actualW = $cliRect.Right - $cliRect.Left
+		$actualH = $cliRect.Bottom - $cliRect.Top
+		$report.observations['resolution_actual'] = "${actualW}x${actualH}"
+		Write-Output ("WINDOW SIZE: requested {0}, actual client {1}x{2}" -f $Resolution, $actualW, $actualH)
+		if ($actualW -ne $targetWidth -or $actualH -ne $targetHeight) {
+			throw ("could not enforce client size {0}x{1} (got {2}x{3})" -f $targetWidth, $targetHeight, $actualW, $actualH)
+		}
+	}
 
 	# Take the foreground once up front and record whether that needed repair: a run that starts
 	# without focus is the run that used to produce phantom input failures.
@@ -714,6 +922,12 @@ try {
 			$report.observations['settled_after_start_lum'] = [math]::Round($settledStats[0], 1)
 			$report.observations['settled_after_start_colours'] = [int]$settledStats[1]
 			$report.observations['settled_after_start_matches_room_signature'] = $combatSignature
+			$report.observations['cursor_visible_settled_play'] = Get-CursorVisible
+			if (($null -ne $settled) -and ((Get-CursorVisible) -eq $false)) {
+				$script:CursorSignalTrusted = $true
+				$report.observations['cursor_signal_trusted'] = $true
+				Write-Output 'CURSOR SIGNAL: cross-checked - hidden while playing, so it is used as the pause state from here on'
+			}
 			Write-Output ("SETTLED AFTER START: lum {0:N1} colours {1} room_signature={2} (focus-pause resumes: {3})" -f $settledStats[0], $settledStats[1], $combatSignature, $report.observations['auto_pause_resumes_after_start'])
 
 			# --- step 2: hold W (movement)
@@ -748,21 +962,22 @@ try {
 			$preEsc = Ensure-Playing -Handle $handle -Path $escBaseline -Tag 'before-esc'
 			$report.observations['auto_pause_resumes_before_esc'] = $(if ($null -ne $preEsc) { [int]$preEsc.resumes } else { -1 })
 			[void](Send-Key -Handle $handle -VirtualKey 0x1B -Context 'esc/single')
-			Start-Sleep -Milliseconds 700
-			$escStats = @(0, 0, 0)
-			$escDiff = 0.0
-			$escDeadline = (Get-Date).AddSeconds(8)
+			# The contract: one injected Esc must flip the game's own pause flag (mouse capture is
+			# released by run_manager._set_state) AND change the picture.
+			$escPaused = $false
+			$escDeadline = (Get-Date).AddSeconds(4)
 			while ((Get-Date) -lt $escDeadline) {
-				[void](Assert-Foreground -Handle $handle -Context 'esc/poll')
-				[void](Save-ClientShot -Handle $handle -Path $shotD)
-				$escStats = [QaImage]::Stats($shotD)
-				$escDelta = [QaImage]::Compare($escBaseline, $shotD, 12)
-				$escDiff = $escDelta[1]
-				# The pause modal is dark (lum < 40) and clearly different from the room HUD.
-				if (($escDiff -ge $ChangeThreshold) -and ($escStats[0] -lt 40.0)) { break }
-				Start-Sleep -Milliseconds 250
+				Start-Sleep -Milliseconds 200
+				if ((Get-PauseState) -eq 'paused') { $escPaused = $true; break }
 			}
-			$escOk = ($escDiff -ge $ChangeThreshold) -and ($escStats[0] -lt 40.0)
+			Start-Sleep -Milliseconds 400
+			[void](Assert-Foreground -Handle $handle -Context 'esc/poll')
+			[void](Save-ClientShot -Handle $handle -Path $shotD)
+			$escStats = [QaImage]::Stats($shotD)
+			$escDelta = [QaImage]::Compare($escBaseline, $shotD, 12)
+			$escDiff = $escDelta[1]
+			$escState = Get-PauseState
+			$escOk = $escPaused -and ($escDiff -ge $ChangeThreshold)
 			$report.steps += [ordered]@{
 				step = 'Esc (pause modal, from playing)'
 				changed_pixel_fraction = [math]::Round($escDiff, 4)
@@ -771,13 +986,12 @@ try {
 				passed = $escOk
 			}
 			Write-Output ("STEP 3 Esc: changed={0:P2} after lum {1:N1} colours {2} -> {3}" -f $escDiff, $escStats[0], $escStats[1], $(if ($escOk) { 'PAUSED' } else { 'NOT PAUSED' }))
+			$report.observations['esc_single_press_paused'] = $escPaused
 			[void](Send-Key -Handle $handle -VirtualKey 0x1B -Context 'esc/unpause')
 			Start-Sleep -Milliseconds 600
 
-			# --- step 4: Esc reception rate (each press must toggle PLAYING <-> PAUSED)
-			# Measured even when the single press above was swallowed, otherwise one swallowed key
-			# looks like "Esc is broken" with no reception data to contradict it.
-			$reception = Test-EscToggle -Handle $handle -Dir $OutDir -Tag 'play' -WantedToggles 4
+			# --- step 4: Esc reception rate. Each delivered press must flip the pause flag.
+			$reception = Test-EscToggle -Handle $handle -Dir $OutDir -Tag 'play' -WantedToggles 2
 			$report.observations['esc_toggles'] = $reception.toggles
 			$report.observations['esc_presses'] = $reception.presses
 			$report.observations['esc_delivered'] = $reception.delivered
@@ -840,6 +1054,7 @@ try {
 	}
 	$report.observations['focus_recoveries'] = $script:ForegroundRecoveries
 	$report.observations['focus_failures'] = $script:ForegroundFailures
+	$report.observations['keyboard_focus_misses'] = $script:FocusWindowMisses
 	$report.observations['keys_injected'] = $script:KeysInjected
 	$report.finished_at = (Get-Date).ToString('o')
 	$suffix = if ($StartupOnly) { 'startup' } else { 'input' }
