@@ -267,11 +267,13 @@ def _draw_dodge_error(rng, prof):
 
 
 def simulate_room(kind, count, entry_hp, flags, rng, profile=DEFAULT_PROFILE,
-                  dodge_enabled=True, time_cap=ROOM_TIME_CAP, uptime_override=None):
+                  dodge_enabled=True, time_cap=ROOM_TIME_CAP, uptime_override=None,
+                  max_attackers=None):
     """模拟一个房间。flags = {"flame":bool,"vitality":bool,"wind":bool}。
 
     uptime_override：显式指定本房输出利用率（Boss 房「贴脸流 / 后撤流」两个口径用）；
     None 表示沿用玩家档自带利用率。
+    max_attackers：覆盖攻击协调器的并发许可数（None = 用全局 SENTINEL_MAX_ATTACKERS）。
     """
     prof = PROFILES[profile]
     normal_mult = FLAME_MULT if flags.get("flame") else 1.0
@@ -280,6 +282,7 @@ def simulate_room(kind, count, entry_hp, flags, rng, profile=DEFAULT_PROFILE,
     inv_start = DODGE["inv_start"]
     inv_end = WIND_INV_END if flags.get("wind") else DODGE["inv_end"]
     uptime = prof["uptime"] if uptime_override is None else uptime_override
+    max_attackers_eff = SENTINEL_MAX_ATTACKERS if max_attackers is None else max_attackers
     engage = ENGAGE[kind]
 
     hp = min(PLAYER_HP, entry_hp)
@@ -297,13 +300,14 @@ def simulate_room(kind, count, entry_hp, flags, rng, profile=DEFAULT_PROFILE,
 
     # 敌人
     if kind == "sentinel":
-        enemies = [{"hp": SENTINEL["hp"], "atk": None} for _ in range(count)]
-        permit_free_at = engage
+        enemies = [{"hp": SENTINEL["hp"], "atk": None, "slot": -1} for _ in range(count)]
+        # 协调器槽位：每个槽在「动作时长 + 交接延迟」后重新可用（槽位数 = max_attackers）
+        slots = [engage] * max(1, int(max_attackers_eff))
         next_attacker = 0
     else:
         enemies = [{"hp": GUARDIAN["hp"], "atk": None, "cycle": 0,
                     "next_atk": engage + BOSS_FIRST_ATTACK_AT}]
-        permit_free_at = 0.0
+        slots = []
         next_attacker = 0
 
     stat = {"attacks": 0, "taken": 0, "dodged": 0, "dodges": 0,
@@ -338,7 +342,9 @@ def simulate_room(kind, count, entry_hp, flags, rng, profile=DEFAULT_PROFILE,
                     # F3：普攻打断哨兵未进入判定的出手
                     if kind == "sentinel" and tgt["atk"] is not None and t < tgt["atk"][0]:
                         tgt["atk"] = None
-                        permit_free_at = min(permit_free_at, t + SENTINEL_HANDOFF)
+                        if 0 <= tgt["slot"] < len(slots):
+                            slots[tgt["slot"]] = min(slots[tgt["slot"]], t + SENTINEL_HANDOFF)
+                        tgt["slot"] = -1
                         stat["interrupts"] += 1
                     if tgt["hp"] <= 0.0:
                         tgt["hp"] = 0.0
@@ -365,19 +371,20 @@ def simulate_room(kind, count, entry_hp, flags, rng, profile=DEFAULT_PROFILE,
                 p_free = t + atk["duration"]
                 p_idx = (p_idx + 1) % 3
 
-        # --- D) 敌人出手（串行许可） ---
+        # --- D) 敌人出手（协调器槽位：最多 max_attackers 只同时出手） ---
         if kind == "sentinel":
-            busy = any(e["atk"] is not None for e in enemies)
-            if not busy and t >= permit_free_at:
+            slot_idx = min(range(len(slots)), key=lambda i: slots[i])
+            if slots[slot_idx] <= t:
                 for k in range(count):
                     idx = (next_attacker + k) % count
                     e = enemies[idx]
-                    if e["hp"] <= 0.0:
+                    if e["hp"] <= 0.0 or e["atk"] is not None:
                         continue
                     atk = SENTINEL["attack"]
                     hs, he = t + atk["hit_start"], t + atk["hit_end"]
                     e["atk"] = (hs, he, atk["damage"])
-                    permit_free_at = t + atk["duration"] + SENTINEL_HANDOFF
+                    e["slot"] = slot_idx
+                    slots[slot_idx] = t + atk["duration"] + SENTINEL_HANDOFF
                     next_attacker = (idx + 1) % count
                     stat["attacks"] += 1
                     pt = _plan_dodge(rng, prof, dodge_enabled, t, hs, he,
@@ -429,6 +436,7 @@ def simulate_room(kind, count, entry_hp, flags, rng, profile=DEFAULT_PROFILE,
     total_attacks = max(stat["attacks"], 1)
     return {
         "kind": kind, "count": count, "outcome": outcome, "time": t,
+        "max_attackers": max_attackers_eff,
         "hp_end": hp, "hp_lost": max(0.0, min(PLAYER_HP, entry_hp) - hp),
         "flags": flags, "invuln_uptime": dodge_uptime(dodge_cd, inv_end),
         "dodge_cd": dodge_cd,
@@ -471,11 +479,13 @@ def _flags(*names):
 
 
 def simulate_run(bl1, bl2, trials=TRIALS, seed=SEED, profile=DEFAULT_PROFILE,
-                 boss_uptime=None):
+                 boss_uptime=None, r2_max_attackers=None):
     """整局模拟。bl1/bl2 为 None 或 blessing id（None 表示该次不选祝福，用于对照组）。
 
     boss_uptime：Boss 房显式输出利用率口径（见 BOSS_TIME_TARGETS / _calibrate_boss_uptime）；
     None = 沿用玩家档。返回里含 raw 明细（每 trial 的 Boss 出手次数），供分布统计使用。
+    r2_max_attackers：只把「房 2」的协调器并发许可改成该值（如 2 = 双流提案），
+    房 1 仍用全局 SENTINEL_MAX_ATTACKERS。
     """
     room_stats = {"r1": [], "r2": [], "boss": []}
     total_lost, total_time = [], []
@@ -503,7 +513,8 @@ def simulate_run(bl1, bl2, trials=TRIALS, seed=SEED, profile=DEFAULT_PROFILE,
             hp = min(PLAYER_HP, hp + VITALITY_ACQUIRE_HEAL)
         # 房 2
         if not dead:
-            r = simulate_room("sentinel", 3, hp, _flags(bl1), rng, profile)
+            r = simulate_room("sentinel", 3, hp, _flags(bl1), rng, profile,
+                              max_attackers=r2_max_attackers)
             room_stats["r2"].append(r)
             tsum += r["time"]
             hp = r["hp_end"]
@@ -1063,6 +1074,69 @@ def main() -> int:
     w("      而非出手堆积；B 口径下阵亡局的绝对出手数（median 7）已远高于 A 口径的全部区间。")
     w("")
 
+    # ---------------- [12] 提案：房2 双流 ----------------
+    w("[12] 提案：房2 攻击协调器 max_attackers 1→2（双流）在 A/B 两种 Boss 口径下的完整数字")
+    w("-" * 100)
+    w("  动机：串行制下『加敌人』不提高出手密度（见 [5] 注），要加压必须提高并发许可。")
+    w("  本提案不改任何 HP / 伤害 / 招式时长，只把 room_02 的 max_attackers 从 1 改成 2。")
+    w("")
+    dual = 2
+    base_A = simulate_run(None, None, boss_uptime=None)
+    dual_A = simulate_run(None, None, boss_uptime=None, r2_max_attackers=dual)
+    w("  (a) 三房压力分解对照（无祝福；Boss 口径 A；房1 始终 max_attackers=1）")
+    w("  房间      并发  时长    出手次数  被击中  闪避成功率  打断次数  打断率  损失HP")
+    for key, name in (("r1", "房1 2哨兵"), ("r2", "房2 3哨兵"), ("boss", "Boss")):
+        for tag, rr, n in (("基线", base_A, 1 if key != "boss" else 0),
+                           ("双流", dual_A, 2 if key == "r2" else (1 if key == "r1" else 0))):
+            d = rr[key]
+            w(f"  {name:<9} {n:>3} {d['time']:>7.2f}s {d['attacks']:>9.2f} {d['taken']:>7.2f} "
+              f"{d['dodge_success_rate'] * 100:>10.1f}% {d['interrupts']:>9.2f} "
+              f"{d['interrupt_rate'] * 100:>6.1f}% {d['hp_lost']:>7.2f}   ← {tag}")
+    w("")
+    w("  (b) 整局结果对照（三种 Boss 口径 × 两种 房2 并发）")
+    w("  变体    Boss口径                       房2时长 房2出手 房2打断率 房2损失 "
+      "Boss时长 Boss出手 整局损失 阵亡率(整局) 阵亡分布(房1/房2/Boss)")
+    dual_rows = {}
+    for tag, r2max in (("基线", None), ("双流", dual)):
+        for mname, mup in modes:
+            r = simulate_run(None, None, boss_uptime=mup, r2_max_attackers=r2max)
+            dual_rows[(tag, mname)] = r
+            dr = r["death_room"]
+            w(f"  {tag:<5}  {mname:<30} {r['r2']['time']:>7.2f}s {r['r2']['attacks']:>7.2f} "
+              f"{r['r2']['interrupt_rate'] * 100:>9.1f}% {r['r2']['hp_lost']:>7.2f} "
+              f"{r['boss']['time']:>7.2f}s {r['boss']['attacks']:>7.2f} "
+              f"{r['run_hp_lost']:>8.2f} {r['death_rate'] * 100:>11.1f}%  "
+              f"{dr['r1']}/{dr['r2']}/{dr['boss']}")
+    w("")
+    w("  (c) B 慢局口径下的祝福边际收益（重算，用于替换旧排名）")
+    b_slow = modes[1][1]
+    runs_b = {}
+    for label, b1, b2 in configs:
+        runs_b[label] = simulate_run(b1, b2, boss_uptime=b_slow)
+    b_base = runs_b["无祝福（假想基线）"]["run_hp_lost"]
+    w(f"    基线（B 慢局）整局损失 = {b_base:.2f} HP，阵亡率 "
+      f"{runs_b['无祝福（假想基线）']['death_rate'] * 100:.1f}%")
+    w("    祝福        第一张增益  第二张增益  平均    （A 口径平均：烈焰 9.09 / 生命 50.93 / 疾风 -0.11）")
+    b_first, b_second = {}, {}
+    for b in ("flame", "vitality", "wind"):
+        g1 = gain(b_base, runs_b[f"{BLESSING_LABEL[b]}（仅第一张）"]["run_hp_lost"])
+        deltas = []
+        for a in ("flame", "vitality", "wind"):
+            if a == b:
+                continue
+            solo = runs_b[f"{BLESSING_LABEL[a]}（仅第一张）"]["run_hp_lost"]
+            pair = runs_b[f"{_short(a)}→{_short(b)}"]["run_hp_lost"]
+            deltas.append(gain(solo, pair))
+        g2 = sum(deltas) / len(deltas)
+        b_first[b], b_second[b] = g1, g2
+        w(f"    {BLESSING_LABEL[b]:<10} {g1:>9.2f}% {g2:>10.2f}% {(g1 + g2) / 2:>7.2f}%")
+    rank = sorted((("烈焰之刃", (b_first["flame"] + b_second["flame"]) / 2),
+                   ("生命共鸣", (b_first["vitality"] + b_second["vitality"]) / 2),
+                   ("疾风步伐", (b_first["wind"] + b_second["wind"]) / 2)),
+                  key=lambda x: -x[1])
+    w("    B 慢局排名: " + " > ".join(f"{n} {v:.2f}%" for n, v in rank))
+    w("")
+
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     OUT_PATH.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -1087,6 +1161,13 @@ def main() -> int:
         print(f"boss mode [uptime={r['boss_uptime']}] = {r['boss']['time']:.2f}s  "
               f"attacks {r['boss']['attacks']:.2f}  "
               f"death all/boss {r['death_rate'] * 100:.1f}% / {r['boss_death_rate'] * 100:.1f}%")
+    for tag, _r2max in (("基线", None), ("双流", dual)):
+        for mname, _mup in modes:
+            r = dual_rows[(tag, mname)]
+            print(f"room2 {tag} mode[{r['boss_uptime']}] r2 attacks {r['r2']['attacks']:.2f} "
+                  f"interrupt {r['r2']['interrupt_rate'] * 100:.1f}% lost {r['r2']['hp_lost']:.2f} "
+                  f"run lost {r['run_hp_lost']:.2f} death {r['death_rate'] * 100:.1f}%")
+    print("B-slow blessing rank: " + " > ".join(f"{n} {v:.2f}%" for n, v in rank))
     return 0
 
 

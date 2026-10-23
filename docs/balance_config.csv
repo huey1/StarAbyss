@@ -87,3 +87,8 @@ derived.boss_death_rate_B_pct,24.8,24.8,%,.local/balance_sim_out.txt:224,derived
 boss_max_single_hit,25,25,damage,godot/resources/boss/guardian_shockwave.tres,no,"冲击单次最大伤害；配合出手次数可得理论最大承受伤害 25n"
 boss_expected_attacks_A,4.00,4.00,attacks,.local/balance_sim_out.txt:221,derived,"口径 A；B 慢局 8.68 / B 快局 6.73"
 boss_expected_attacks_B_slow,8.68,8.68,attacks,.local/balance_sim_out.txt:224,derived,"口径 B 慢局；分布 min3/p25 7/median 9/p75 10/max16（右删失，阵亡局 median 7）"
+room_02.max_attackers,1,2,attackers,godot/scenes/levels/room_02.tscn（AttackCoordinator 导出值）,partial,"下一版提案『双流』：只改并发许可不动 HP/伤害；房2 出手 6.84→13.13 损失 18.05→38.88 打断率不变 39.4→39.3；整局阵亡率 A 1.8%→11.2% / B慢 24.8%→47.8% / B快 12.5%→32.2% ⇒ 单用超调 须与 Boss 加压二选一；需 grep 是否有集成用例覆盖 room_02"
+room_02.attack_streams,1,2,streams,.local/balance_sim_out.txt:268,derived,"双流后房2 有效出手间隔 ≈1.53/2=0.77s（低于闪避 CD 1.2s）⇒ 此时疾风步伐的冷却才成为约束"
+derived.room2_dual_hp_lost,38.88,38.88,HP,.local/balance_sim_out.txt:268,derived,"双流房2 损失 已超过 Boss 房 17.55 ⇒ 责任房间从 Boss 变成房2（阵亡分布却仍记在 Boss 房）"
+derived.room2_dual_death_rate_A_pct,11.2,11.2,%,.local/balance_sim_out.txt:277,derived,"双流 + 口径 A；单此一项即越过『普通玩家 10-20%』目标上界"
+derived.blessing_rank_B_slow,生命>烈焰>疾风,生命>烈焰>疾风,rank,.local/balance_sim_out.txt:287,derived,"B 慢局口径 29.67 / 5.91 / -0.79 —— 排序与 A 口径相同 数值压缩（基线变大稀释固定回血）"
