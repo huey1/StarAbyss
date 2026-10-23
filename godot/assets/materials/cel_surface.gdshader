@@ -13,7 +13,7 @@ uniform float highlight_threshold : hint_range(0.0, 1.0) = 0.75;
 // the charging actor lights up — it never implies a larger damage area.
 uniform vec4 threat_color : source_color = vec4(1.0, 0.45, 0.14, 1.0);
 uniform float threat_strength : hint_range(0.0, 4.0) = 1.7;
-instance uniform float threat_pulse : hint_range(0.0, 1.0) = 0.0;
+instance uniform float threat_pulse = 0.0;
 
 void fragment() {
 	float threat = clamp(threat_pulse, 0.0, 1.0);

@@ -12,7 +12,7 @@
 | --- | --- | --- | --- |
 | L1 headless | 规则、数值、状态机、AI 行为、流程、音频资源、VFX 资源。无窗口，`--headless`，可控且快 | `py tools\verify.py --headless-only` | 窗口、Forward+ 渲染、真实鼠标、注入输入的完整局 |
 | L2 图形 | 真实窗口 + Forward+ 渲染 + 注入键鼠 + 真实物理步进，含三房通关闭环 | `py tools\verify.py` | 发布包本身（跑的是工程源码） |
-| L3 打包数据 | 最终 PCK 内的数据完整可玩（无测试源码、主菜单、真实点击、移动/技能、暂停、重开、返回菜单） | `py tools\verify.py --packed <你的.pck> --only export-smoke` | 真实 exe 的原生输入（官方 release 模板禁止脚本注入） |
+| L3 打包数据 | 两层互补：`pack_audit.gd` 证明**清单完整**（27 音频 cue 可解码、7 场景、7 GLB、无测试泄漏、主场景设置正确，75 项）；`export-smoke` 证明**真的能玩起来**（无测试源码、主菜单真实点击、骨骼/武器加载、移动/技能输入、暂停、重开、返回菜单，15 项） | `& $G --headless --main-pack <你的.pck> --script D:\game\StarAbyss\tools\pack_audit.gd --audio-driver Dummy`（零窗口）<br>`py tools\verify.py --packed <你的.pck> --only export-smoke`（图形） | 真实 exe 的原生输入（官方 release 模板禁止脚本注入）。怀疑包坏时先跑 `tools/pack_diagnose.gd` 看 `project.binary` 的 magic 与长度。**`pack_audit` 不解析 GDScript，不能替代 `export-smoke`**：曾出现"审计 75/75 通过、但包内 `actor_presentation.gd` 是半保存的版本（Parse Error）、玩家表现层全坏"的中间包，只有 `export-smoke` 能抓到。**两件都必须跑才算验完包。** |
 | L4 发布 exe 原生输入 | 真实 `StarAbyss.exe` 在 OS 级注入（Win32 鼠标/键盘）下场景确实响应 | 见 `.local/validation/native_input_*.png` 与报告 | 完整闭环（该层只做画面差异佐证，闭环由 L2+L3 覆盖） |
 
 ### 2. 运行器与命令
@@ -53,6 +53,8 @@ $env:LOCALAPPDATA='D:\game\StarAbyss\.local\localappdata'
 4. **图形检查独占窗口**：图形套件会真实开窗并注入键鼠；运行期间移动鼠标或切换窗口焦点会污染注入事件导致假失败（失焦还会触发游戏自动暂停）。多 Agent 共用本机时，开跑前报备、跑完立即释放。
 5. **已知无害日志**：`Failed to read the root certificate store.`、`Can't save resource to empty path`、`Error saving editor settings to` 由沙箱与重定向用户目录引起，运行器已列入忽略名单。其余错误一律算失败。
 6. 每阶段超时：普通 300 s、`import` 600 s、`full-run-integration` 与 `performance` 900 s。
+7. **打包相关运行还需 `TEMP`/`TMP`**：`verify.py` 只内置 `APPDATA`/`LOCALAPPDATA`；`--export-pack`、以及任何可能让引擎写临时文件的打包检查，请在外层把 `TEMP`/`TMP` 也指到 `.local\tmp`。否则引擎写 `%TEMP%\tmpproject.binary` 失败会把 **0 字节的 `project.binary`** 打进包（退出码仍为 0、体积也正常，极具欺骗性），装起来必崩。
+8. **不要在别人跑测试时保存脚本**：半保存/半完成的脚本会让正在运行的检查读到 `Parse Error` 并判红（实测 `actor_presentation.gd` 曾在一次图形全量中途被编辑，最后一项检查因此失败）。改完先用 `& $G --path godot --headless --check-only --script res://<file>.gd` 自查（exit 0 且无输出即可解析），再通知别人使用窗口。
 
 ### 4. 用例清单与当前结果
 
@@ -74,6 +76,14 @@ $env:LOCALAPPDATA='D:\game\StarAbyss\.local\localappdata'
 
 **L2 图形（9 项，不加 `--headless-only`）**：main-window（真实窗口启动）、art-rendering（Forward+ 真实帧 + 截图）、vfx-rendering、input-physics（WASD/跳跃/闪避/镜头 + 真实鼠标事件）、combat-integration、enemy-integration、room-integration（实际 Esc/卡片点击/走门）、full-run-integration（菜单点击→2哨兵→祝福→3哨兵→祝福→Boss 350HP→胜利/失败→重开/返回菜单，连续三局）、performance（帧时间/draw call 采样）。
 
+**截图客观校验**：截图存在不等于画面正确（可能黑屏/纯色）。用 `tools/screenshot_check.py`（Pillow + numpy）做像素级统计，判据为"亮度标准差 < 3 或量化色数 < 12"即视为空白：
+
+```powershell
+& $PY tools\screenshot_check.py docs\*.png            # 批量：亮度/色数/黑屏占比 → .local\validation\screenshot_stats.json
+& $PY tools\screenshot_check.py --diff a.png b.png    # 帧间差异：mean_abs_diff / changed_pixel_fraction / identical
+```
+`--diff` 也用于"注入按键后画面真的变了"这类断言（如 L4 原生输入）。
+
 **L3 打包数据（1 项，需 `--packed`）**：export-smoke，15 项断言（含包内无测试源码、主菜单真实点击、骨骼/武器加载、移动/技能输入、Esc 暂停、重开、返回菜单、游戏帧截图）。
 
 **QA 新增补充用例**：`godot/tests/robustness_test.gd`（39 项，headless 与图形均可跑）。覆盖既有套件的空白：窗口失焦/恢复（`NOTIFICATION_APPLICATION_FOCUS_OUT` 触发暂停、重复失焦不损坏状态、失焦不打断祝福选择）、连续三次重开（含从暂停与失败状态重开、子节点不增长、只留一个 RoomController 实例）、重复点击同一张祝福卡不重复生效、过期 reward id 无法二次生效、UI 契约（菜单按钮、暂停弹窗按钮、祝福卡数量与按钮可见性规则、房间计数与目标文本）、帧处理时间预算代理（**不是 fps 结论**）。
@@ -85,7 +95,13 @@ $env:LOCALAPPDATA='D:\game\StarAbyss\.local\localappdata'
 - **人工试玩**：手感、美术风格认可、动作过渡观感、音效听感、真实键鼠三局——需真人，自动化不能替代。
 - **L4 原生输入**：需要发布 exe 与 OS 级注入，且只能证明"画面响应"，不能证明完整闭环。
 - **真实发布 exe 的完整闭环**：官方 release 模板禁止外部脚本注入，只能由 L2（源码）+ L3（包内数据）组合证明。
-- **其他 GPU / 音频设备 / 操作系统版本**：未验证，仅在当前机器实测。
+- **其他 GPU / 音频设备 / 操作系统版本**：未验证，仅在当前机器（RTX 3050 / Vulkan / Forward+ / Windows）实测。
+
+### 6. 已知限制与判读口径（写报告/对外说明时必须一致）
+
+1. **冷启动首次进入 3D 场景单帧约 3548 ms**：Vulkan pipeline / shader cache 首次编译所致，暖缓存下为 165–200 ms。属首发体验风险，本期不修（加预加载或加载界面属行为变更），由 T10 在真实导出包上复测并写入已知限制。数据来源 `docs/PERFORMANCE.md`。
+2. **帧时间判读**：`run/max_fps=60` + 关闭 vsync 时 p50 ≈ 16.66–16.69 ms、**mean FPS = 60.0**；"`>16.7 ms` 的帧占比约 50%"是**帧限速器睡眠粒度抖动，不是掉帧**。有意义的是 p95 ≈ 17.1–18.0 ms、p99 ≈ 17.5–19.5 ms、偶发单帧 max 27–38 ms。
+3. 自动化连续三局**不**证明 GDD 的 5–8 分钟人工局时，也不替代人工平衡判断。
 
 ---
 

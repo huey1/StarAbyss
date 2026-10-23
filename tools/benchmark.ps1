@@ -8,13 +8,16 @@
 # Works on Windows PowerShell 5.1 (the previous version required PowerShell 7 for
 # ProcessStartInfo.ArgumentList, which this machine does not have).
 #
+# This machine's execution policy rejects unsigned scripts, so always launch it with
+# -ExecutionPolicy Bypass (that is what the command lines below do):
+#
 # Quick start (from the project root):
-#   powershell -NoProfile -File tools\benchmark.ps1                      # 1920x1080, capped at 60
-#   powershell -NoProfile -File tools\benchmark.ps1 -Resolution 1280x720 -FrameCap 60 -Label 720p60
-#   powershell -NoProfile -File tools\benchmark.ps1 -FrameCap 0 -Label 1080p-uncapped   # headroom
-#   powershell -NoProfile -File tools\benchmark.ps1 -Suite benchmark -Resolution 1920x1080 -FrameCap 0
-#   powershell -NoProfile -File tools\benchmark.ps1 -Info -Resolution 1280x720          # window/viewport facts
-#   powershell -NoProfile -File tools\benchmark.ps1 -Matrix                             # 2 resolutions x capped/uncapped
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\benchmark.ps1      # 1920x1080, capped at 60
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\benchmark.ps1 -Resolution 1280x720 -FrameCap 60 -Label 720p60
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\benchmark.ps1 -FrameCap 0 -Label 1080p-uncapped
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\benchmark.ps1 -Suite benchmark -Resolution 1920x1080 -FrameCap 0
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\benchmark.ps1 -Info -Resolution 1280x720
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\benchmark.ps1 -Matrix   # 2 resolutions x capped/uncapped
 #
 # Requirements and cautions:
 #   * the desktop window is opened and owns the foreground; do not move the mouse or
@@ -116,8 +119,8 @@ function Invoke-BenchmarkRun {
     }
     $benchmarkEngineLog = if (Test-Path -LiteralPath $benchmarkLog) { Get-Content -LiteralPath $benchmarkLog -Raw } else { '' }
     if ($RunInfo) {
-        $benchmarkInfoLines = ($benchmarkText + $benchmarkEngineLog) -split "`r?`n" | Where-Object { $_ -like 'PERFORMANCE PROBE INFO*' }
-        foreach ($benchmarkInfoLine in $benchmarkInfoLines) { Write-Output $benchmarkInfoLine }
+        # Info mode prints the banner plus a pretty-printed JSON block; show it all.
+        Write-Output $benchmarkText.TrimEnd()
         Write-Output "log: $benchmarkLog"
         return
     }

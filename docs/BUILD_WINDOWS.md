@@ -20,24 +20,26 @@ D:\game\apps\godot\Godot_v4.7.2-stable_win64.exe           # 图形模式手动�
 
 | 项目 | 值 |
 | --- | --- |
-| 安装目录 | `%APPDATA%\Godot\export_templates\4.7.2.stable\`（本机 = `C:\Users\hongxinyu\AppData\Roaming\Godot\export_templates\4.7.2.stable\`） |
+| 安装目录 | `D:\game\StarAbyss\.local\export_templates\4.7.2.stable\`（**工程内**，被 `.gitignore` 忽略） |
 | 必需文件 | `windows_release_x86_64.exe` **和** `windows_debug_x86_64.exe` |
-| 预设配置 | `godot/export_presets.cfg` 的 `custom_template/debug` 与 `custom_template/release` **都置空** |
+| 预设配置 | `custom_template/release="res://../.local/export_templates/4.7.2.stable/windows_release_x86_64.exe"`，`custom_template/debug` 同理 |
 | 官方压缩包 | `Godot_v4.7.2-stable_export_templates.tpz`，1,281,349,702 字节 |
+
+**为什么模板必须放在工程内，而不是标准的 `%APPDATA%\Godot\export_templates\`**：
+
+这台机器上**引擎进程只能写 `D:\game` 工作区内的路径**（第 1.5 节有对照实验）。标准模板目录在真实的 `C:\Users\<user>\AppData\Roaming\Godot\` 下，引擎既写不进去、也不能作为可依赖的方案。因此：
+
+- 模板解压到工程内 `.local/export_templates/4.7.2.stable/`；
+- `export_presets.cfg` 用**显式** `custom_template` 指向该路径，不依赖 APPDATA 是否被重定向；
+- 这也是原文件里 `res://../.local/export_templates/...` 写法的由来（上一轮会话在这台机器上踩过同一个坑），只是当时版本号写成了不存在的 `4.7.stable`。**置空 `custom_template`（走标准目录）在普通机器上成立，在本验证环境不成立。**
 
 **为什么两个模板都要**：即使只跑 `--export-release`，Godot 4.7.2 也会同时校验该预设的 debug 与 release 模板。只装 release 会得到：
 
 ```text
 ERROR: Cannot export project with preset "Windows Desktop" due to configuration errors:
-C:/Users/<user>/AppData/Roaming/Godot/export_templates/4.7.2.stable/windows_debug_x86_64.exe
-C:/Users/<user>/AppData/Roaming/Godot/export_templates/4.7.2.stable/windows_release_x86_64.exe
+<...>/windows_debug_x86_64.exe
+<...>/windows_release_x86_64.exe
 ```
-
-**为什么用标准目录 + 置空 `custom_template`**（而不是工程内 `.local/export_templates`）：
-
-- `custom_template` 里写的路径必须真实存在；先前版本残留的 `res://../.local/export_templates/4.7.stable/windows_release_x86_64.exe` 指向一个不存在、且版本号也错的目录，是"导出失败"的直接原因。
-- 置空表示"用该版本的标准模板"，Godot 自己按 `%APPDATA%/Godot/export_templates/<version>/` 查找，没有路径漂移。
-- `.local/` 被 `.gitignore` 忽略，clone 到新机器后不可能自带模板，写在 `custom_template` 里只会得到一个含义不明的失败。
 
 **安装命令（可复现，脚本不联网）**：
 
@@ -45,7 +47,7 @@ C:/Users/<user>/AppData/Roaming/Godot/export_templates/4.7.2.stable/windows_rele
 py tools\build_windows.py --install-templates "D:\game\downloads\Godot_v4.7.2-stable_export_templates.tpz"
 ```
 
-该命令先 `zipfile.testzip()` 校验整个包完整，再从 `templates/` 抽出 Windows x64 的 release/debug 两个模板，打印各自大小与 sha256，并强制校验模板 `--version`。模板包本身由 `D:\game\download.py`（断点续传，`py` 启动器）从官方发布资产下载；`build_windows.py` 从不下载任何东西（符合 AGENTS.md：不自动下载引擎/插件/资产）。
+该命令先 `zipfile.testzip()` 校验整个包完整，再从 `templates/` 抽出 Windows x64 的 release/debug 两个模板到工程内，打印各自大小与 sha256，并强制校验模板 `--version == 4.7.2.stable.official.ed1daf0bf`。模板包本身由 `D:\game\download.py`（断点续传，`py` 启动器）从官方发布资产下载；`build_windows.py` 从不下载任何东西（符合 AGENTS.md：不自动下载引擎/插件/资产）。
 
 ### 1.3 Python 与 PowerShell
 
@@ -70,19 +72,24 @@ Get-Process Godot*,StarAbyss* -ErrorAction SilentlyContinue   # 必须先为空
 
 | 变量 | 构建时取值 | 理由 |
 | --- | --- | --- |
-| `APPDATA` | **保持真实**（`C:\Users\...\AppData\Roaming`） | 导出模板在 `%APPDATA%\Godot\export_templates\`，重定向它就找不到模板 |
-| `LOCALAPPDATA` | `D:\game\StarAbyss\.local\localappdata` | 只影响编辑器文档缓存；不重定向会恒产生 3 条 `Could not create editor cache directory` 假 ERROR |
-| `TEMP` / `TMP` | `D:\game\StarAbyss\.local\tmp` | 见下方"静默废包"缺陷 |
+| `APPDATA` | `D:\game\StarAbyss\.local\appdata` | 引擎用户数据目录；模板走显式 `custom_template` 路径，所以不再依赖它 |
+| `LOCALAPPDATA` | `D:\game\StarAbyss\.local\localappdata` | 编辑器文档缓存；不重定向会恒产生 3 条 `Could not create editor cache directory` 假 ERROR |
+| `TEMP` / `TMP` | `D:\game\StarAbyss\.local\temp` | 见下方"静默废包"缺陷 |
 
-> **静默废包缺陷（2026-10-23 实测，务必保留这条重定向）**
+四个变量由 `tools/build_windows.py` 的 `ENGINE_ENV_OVERRIDES` 强制注入每个引擎阶段，并在构建开头打印实际取值。
+
+> **构建不变量（加粗记住）：构建过程不得需要写工作区 `D:\game` 之外的任何路径。**
+> 这是本验证环境的硬约束，也是这套构建脚本能跑通的根本原因。任何"顺手往 `%APPDATA%`、`%TEMP%`、`C:\` 写点东西"的改动都会让构建在这里失败。
+
+> **静默废包缺陷（2026-10-23 实测，务必保留 TEMP 重定向）**
 > 导出器把 `project.binary` 先序列化到 `%TEMP%/tmpproject.binary` 再加进 PCK。当 TEMP 写不进去时：
 > - 导出**退出码仍是 0**，PCK 照样生成（3,156,204 字节），
-> - 但包内 `project.binary` 是 **0 字节**，包**无法启动**，
+> - 但包内 `project.binary` 是 **0 字节**，包**无法启动**（审计会报 `Corrupted header in binary project.binary (not ECFG)`、主场景设置为空），
 > - 日志里只有 6 行 `ERROR: Couldn't save project.binary at '.../Temp/tmpproject.binary'` / `Can't open file from path` / `Cannot remove non-existent file or directory`。
 >
-> 因此构建脚本除了重定向 TEMP，还强制解析 PCK 尾部索引校验 `project.binary` 存在且非空（`assert_pck_is_launchable()`），把静默失败变成构建失败。
+> 所以：**退出码 0 不代表包可用**。构建用两道门禁把静默失败变成构建失败（见第 3 节）：`assert_pck_is_launchable()`（解析索引，必须存在非空 `project.binary`）+ `pack_audit.gd`（75 项内容审计）。
 
-与 `tools/verify.py` 的区别：测试运行器为了隔离会把 `APPDATA` 也重定向进 `.local/appdata`（它不需要模板），**构建脚本不能照抄**。
+与 `tools/verify.py` 的区别：测试运行器为了隔离同样把 `APPDATA`/`LOCALAPPDATA` 重定向进 `.local/`，但它不导出，因此不需要模板。
 
 ## 2. 构建
 
@@ -98,9 +105,11 @@ py tools\build_windows.py --out D:\tmp\b   # 换输出根目录
 py tools\build_windows.py --godot <path>   # 指定同版本引擎
 ```
 
-失败即非零退出并打印 `FAIL: <阶段> ...` 摘要（含引擎输出尾部）。阶段：`editor-version` → `export` → `engine-notices` → `pck-functional-smoke` → `release-normal-start`。
+失败即非零退出并打印 `FAIL: <阶段> ...` 摘要（含引擎输出尾部）。阶段：`editor-version` → `export` → `pack-audit` → `engine-notices` → `pck-functional-smoke` → `release-normal-start`。
 
 ### 输出
+
+发布包名带**项目自己的版本号**（`application/config/version`，当前 `1.0.0`，脚本读取、不硬编码）：
 
 ```text
 builds/windows/star_abyss_windows_x64/
@@ -111,15 +120,24 @@ builds/windows/star_abyss_windows_x64/
   THIRD_PARTY_NOTICES.json
   BUILD_INFO.json
   SHA256SUMS.txt
-builds/windows/star_abyss_windows_x64.zip
-builds/windows/star_abyss_windows_x64.zip.sha256
+builds/windows/star_abyss_1.0.0_windows_x64.zip
+builds/windows/star_abyss_1.0.0_windows_x64.zip.sha256
 ```
 
-`BUILD_INFO.json` 记录引擎版本、模板路径与 sha256、exe/pck 的字节数与 sha256，以及四个**互相独立**的验证标志：`pck_functional_smoke_verified`、`release_normal_start_verified`、`release_native_input_verified`、`human_playtest_verified`。没有实际执行的检查保持 `false`。
+`BUILD_INFO.json` 记录版本号、引擎版本、模板路径与 sha256、exe/pck 的字节数与 sha256、`pack_audit_checks`，以及四个**互相独立**的验证标志：`pck_functional_smoke_verified`（来自 `EXPORT SMOKE RESULT` 夹具）、`release_normal_start_verified`（来自 release-normal-start 阶段成功且命中 `Forward+`）、`release_native_input_verified`、`human_playtest_verified`。前两者来源不同、不可互相推定；没有实际执行的检查保持 `false`。
 
 `export_presets.cfg` 以 release 模式编译资源，`exclude_filter="tests/*,*.md,*.blend,*.blend1,*.blend2"`；PCK 独立不嵌入 EXE（`binary_format/embed_pck=false`），解压后必须保持同名 PCK 与 EXE 相邻。包未做代码签名，构建不读取证书或密码。引擎与第三方许可由本机 Godot 的 `Engine.get_license_text()` / `get_copyright_info()` 生成，不手写。
 
-## 3. 包验收（两层，不能互相替代）
+## 3. 包验收（两层门禁 + 两层运行验证）
+
+### 3.1 构建内的两道门禁（都过才算包可用）
+
+1. **索引门禁（快，不启动引擎）** `assert_pck_is_launchable()`：解析 PCK 自己的文件索引，要求 `project.binary` **存在且非 0 字节**。这是对第 1.5 节静默废包缺陷的直接拦截。
+2. **内容门禁（冒烟引擎）** `tools/pack_audit.gd`，以 `--headless --main-pack <pck>` 运行，要求输出 `PACK AUDIT RESULT: <N> checks, 0 failures` 且退出码 0。它断言：27 个音频 cue 存在且可解码、7 个场景、7 个 GLB、4 项"开发测试未泄漏"、`application/run/main_scene` 未被破坏。
+
+> **维护提醒**：`pack_audit.gd` 里的 `EXPECTED_AUDIO` / `EXPECTED_SCENES` / `EXPECTED_MODELS` 是**硬编码清单**，同时充当"发布资产清单"。art 增删音频或更换模型时必须同步修改该脚本，否则门禁会误红（新资产未登记）或漏检（清单没跟上）。
+
+### 3.2 运行验证（两层，不能互相替代）
 
 官方 4.7 release 模板以 `disable_path_overrides=yes` 编译：拒绝 `--main-pack`、不支持外部 `--script`。所以分两层：
 
@@ -151,7 +169,9 @@ py tools\inspect_pck.py builds\windows\star_abyss_windows_x64\StarAbyss.pck proj
 
 ## 4. 日志、错误过滤与无害行
 
-各阶段输出落在 `.local/export-diagnostics/`：`<stage>.output.txt`（stdout+stderr）与 `<stage>.log`（引擎 `--log-file`）。任一阶段出现 `SCRIPT ERROR:` / `SHADER ERROR:` / `ERROR:` / `FAIL:` / `WARNING:` 即失败，只有下列环境噪声被显式豁免（每条都是"引擎写不了自己的用户目录"或"读不到系统证书库"，与游戏、与导出产物无关）：
+各阶段输出落在 `.local/export-diagnostics/`：`<stage>.output.txt`（stdout+stderr）与 `<stage>.log`（引擎 `--log-file`）。任一阶段出现 `SCRIPT ERROR:` / `SHADER ERROR:` / `ERROR:` / `FAIL:` / `WARNING:` 即失败——**`WARNING:` 也计失败是刻意的**：警告通常是资源或脚本的真实问题。如果某天引擎打出确实无害的警告，处理方式是像环境噪声那样**精确加白名单并写进本文档**，而不是把 `WARNING:` 整体放过。
+
+只有下列环境噪声被显式豁免（每条都是"引擎写不了自己的用户目录"或"读不到系统证书库"，与游戏、与导出产物无关）：
 
 ```text
 Failed to read the root certificate store

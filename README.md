@@ -114,7 +114,7 @@ py tools\verify.py --json .local\validation\summary.json
 
 成功标志为 `EXPORT SMOKE RESULT: N checks, 0 failures`，退出码 0；测试脚本不进入包内。该夹具由 `py tools\build_windows.py` 自动执行，构建与验收细节见 [docs/BUILD_WINDOWS.md](docs/BUILD_WINDOWS.md)。
 
-断言数**以 [docs/TEST_REPORT.md](docs/TEST_REPORT.md) 的记录为准**（QA 实测，2026-10-23）：headless 全量 416 项断言；图形套件跑完后总数 ≥ 619。本文件早先写的“544 项”是 P6 阶段的数字，已不适用，请勿引用。
+断言数以 [docs/TEST_REPORT.md](docs/TEST_REPORT.md) 的记录为准。当前实测（2026-10-23，QA 图形全量）：**21 项检查、872 项断言、0 项断言失败**，明细见 `docs/TEST_REPORT.md`。本文件早先写的“544 项”是 P6 阶段的数字，已不适用，请勿引用；也不要把 headless 与图形层的断言相加后当成“唯一断言数”，两层会复验同一批断言。
 
 修改共享场地实体几何后，需重烘焙导航并重新验收：
 
@@ -129,7 +129,7 @@ py tools\verify.py
 
 完整验收会打开普通主场景，再在窗口中注入输入和执行真实物理步进，生成 P2/P3/P4 预览。集成测试关闭持续绘制，并对截图显式调用 Forward+ 绘制；不代表性能基准。P4 检查 1280×720 与 1920×1080。运行期间请不要操作窗口或移动鼠标。日志在 `.local/validation/`；任一脚本、资源或引擎错误均导致失败。headless 无法代替窗口输入与渲染验收。
 
-`tools/verify.py` 为测试隔离把 `APPDATA` 定向到项目内 `.local/appdata/`，不改写已有 Godot 编辑器设置；**构建脚本 `tools/build_windows.py` 相反，不重定向 `APPDATA`**，否则找不到官方导出模板目录。受限沙箱可能禁止读取 Windows 证书库，应在允许系统访问的环境执行验收。
+`tools/verify.py` 为测试隔离把 `APPDATA`/`LOCALAPPDATA` 定向到项目内 `.local/`；`tools/build_windows.py` 同样把 `APPDATA`/`LOCALAPPDATA`/`TEMP`/`TMP` 全部定向到 `.local/`——本验证环境禁止引擎写工作区外的路径，不重定向 `TEMP` 会导致导出的包内 `project.binary` 为 0 字节（包不可启动，但导出仍返回 0）。导出模板因此放在 `.local/export_templates/4.7.2.stable/`，由 `export_presets.cfg` 的 `custom_template/release` 显式指定。受限沙箱可能禁止读取 Windows 证书库，应在允许系统访问的环境执行验收。
 
 人工步骤和验证边界见 [docs/TESTING.md](docs/TESTING.md)，技术架构见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)，环境记录见 [docs/ENVIRONMENT.md](docs/ENVIRONMENT.md)。
 

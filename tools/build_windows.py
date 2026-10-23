@@ -54,6 +54,7 @@ EXPECTED_ENGINE_PREFIX = "4.7.2.stable"
 TEMPLATE_VERSION_DIR = "4.7.2.stable"
 PRESET_NAME = "Windows Desktop"
 PACKAGE_NAME = "star_abyss_windows_x64"
+ZIP_STEM = "star_abyss"
 EXE_NAME = "StarAbyss.exe"
 PCK_NAME = "StarAbyss.pck"
 ALLOWED_PACKAGE_FILES = (
@@ -65,29 +66,17 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 GAME_PATH = PROJECT_ROOT / "godot"
 DEFAULT_BUILD_ROOT = PROJECT_ROOT / "builds" / "windows"
 DIAGNOSTICS_PATH = PROJECT_ROOT / ".local" / "export-diagnostics"
-# In-project template copy, pinned explicitly by export_presets.cfg:
-#   custom_template/{debug,release} = "res://../.local/export_templates/<ver>/windows_*.exe"
-TEMPLATE_DIR = PROJECT_ROOT / ".local" / "export_templates" / TEMPLATE_VERSION_DIR
 
-
-def template_dir() -> Path:
-    """Templates live INSIDE the workspace: this environment forbids the engine from
-    writing the real %APPDATA%/Godot (it can fail even reads there), so the project
-    keeps its own copy and the preset pins it explicitly."""
-    return TEMPLATE_DIR
-
-
-def template_exe(kind: str = "release") -> Path:
-    return template_dir() / f"windows_{kind}_x86_64.exe"
-
-
-# Invariant of this build: NOTHING may be written outside the workspace (D:\game).
-# The engine is sandboxed to that tree, so every user directory it would normally use
-# is redirected into .local/. APPDATA also decides where export templates are looked
-# up, which is why the preset pins an explicit in-project template path instead of
-# relying on the standard %APPDATA%/Godot/export_templates directory.
-LOCAL_APPDATA_PATH = PROJECT_ROOT / ".local" / "localappdata"
+# Build invariant: NOTHING may be written outside the workspace (D:\game); this
+# environment sandboxes the engine to that tree. Every user directory the engine would
+# normally use is therefore redirected into .local/.
+# APPDATA also decides where export templates are looked up, so redirecting it means the
+# engine's native lookup <APPDATA>/Godot/export_templates/<version>/ points INSIDE the
+# project: export_presets.cfg can leave custom_template/{debug,release} empty (no
+# "res://../" path escape, no machine-specific absolute path) and the same script works
+# unchanged on a normal machine that has templates in its real %APPDATA%.
 APPDATA_PATH = PROJECT_ROOT / ".local" / "appdata"
+LOCAL_APPDATA_PATH = PROJECT_ROOT / ".local" / "localappdata"
 # The exporter serialises project.binary through the OS temp directory before adding it
 # to the PCK. When that write fails the export still exits 0 but the pack ships an EMPTY
 # project.binary and cannot start, so TEMP/TMP must be writable too.
@@ -98,6 +87,17 @@ ENGINE_ENV_OVERRIDES = {
     "TEMP": str(TEMP_PATH),
     "TMP": str(TEMP_PATH),
 }
+
+TEMPLATE_DIR = APPDATA_PATH / "Godot" / "export_templates" / TEMPLATE_VERSION_DIR
+
+
+def template_dir() -> Path:
+    """Godot's own template directory as seen by the build (APPDATA is redirected)."""
+    return TEMPLATE_DIR
+
+
+def template_exe(kind: str = "release") -> Path:
+    return template_dir() / f"windows_{kind}_x86_64.exe"
 
 
 # Engine lines caused by this environment, never by the game or the export itself:
@@ -148,14 +148,13 @@ class Paths:
         return Path(str(self.zip) + ".sha256")
 
     @classmethod
-    def from_root(cls, root: Path) -> "Paths":
+    def from_root(cls, root: Path, version: str = "") -> "Paths":
         package = root / PACKAGE_NAME
+        # Version-tagged archive name so two releases can never be confused.
+        tag = f"_{version}" if version else ""
         return cls(build_root=root, package_path=package,
                    exe=package / EXE_NAME, pck=package / PCK_NAME,
-                   zip=root / f"{PACKAGE_NAME}.zip")
-
-
-DEFAULT_PATHS = Paths.from_root(DEFAULT_BUILD_ROOT)
+                   zip=root / f"{ZIP_STEM}{tag}_windows_x64.zip")
 
 
 def log(message: str) -> None:
@@ -284,6 +283,20 @@ def engine_version(godot: Path) -> str:
     return lines[-1]
 
 
+def project_version() -> str:
+    """Read application/config/version from the project; a release must carry one."""
+    manifest = GAME_PATH / "project.godot"
+    if not manifest.is_file():
+        raise BuildError(f"Missing project manifest: {manifest}")
+    text = manifest.read_text(encoding="utf-8", errors="replace")
+    match = re.search(r'^config/version\s*=\s*"([^"]+)"', text, re.MULTILINE)
+    if not match or not match.group(1).strip():
+        raise BuildError(
+            "project.godot has no application/config/version; a release package must "
+            "carry a version number.")
+    return match.group(1).strip()
+
+
 def template_version_of(template: Path) -> str:
     """Ask the template binary for its engine version."""
     output = run_stage("template-version", template, ["--version"], PROJECT_ROOT, 60)
@@ -293,13 +306,38 @@ def template_version_of(template: Path) -> str:
     return lines[-1]
 
 
-def check_preset_pin(require_files: bool = True) -> None:
-    """The preset must pin the in-project template paths explicitly.
+def template_version_evidence() -> tuple[str, Path]:
+    """Read the engine version from an installed export template.
 
-    This environment forbids the engine from using the standard
-    %APPDATA%/Godot/export_templates directory, so an empty pin would make a real
-    release export fail. `require_files=False` (pack-only diagnostics) only warns,
-    because --export-pack does not use export templates at all.
+    Release templates do not necessarily accept `--version`, so the debug template is
+    tried as a fallback. Failing both is a build failure on purpose: a version check that
+    silently passes would defeat the point of pinning the exact engine build.
+    """
+    rejected: list[str] = []
+    for kind in ("release", "debug"):
+        candidate = template_exe(kind)
+        if not candidate.is_file():
+            continue
+        try:
+            version = template_version_of(candidate)
+        except BuildError as exc:
+            rejected.append(f"{candidate.name}: {str(exc).splitlines()[0]}")
+            continue
+        if not re.match(r"^\d+\.\d+\.\d+\.", version):
+            rejected.append(f"{candidate.name}: unexpected output {version!r}")
+            continue
+        log(f"  version reported by {candidate.name}: {version}")
+        return version, candidate
+    detail = "\n  ".join(rejected) if rejected else "no template installed"
+    raise BuildError(f"Could not read the engine version from any installed template:\n  {detail}")
+
+
+def check_preset_pin(require_files: bool = True) -> None:
+    """The preset must leave custom_template empty: the native template lookup is used.
+
+    An empty pin makes Godot resolve <APPDATA>/Godot/export_templates/<version>/, which
+    the build redirects into the project. A non-empty pin is rejected because it pins a
+    machine-specific or path-escaping location that would not reproduce elsewhere.
     """
     preset = GAME_PATH / "export_presets.cfg"
     if not preset.is_file():
@@ -311,25 +349,13 @@ def check_preset_pin(require_files: bool = True) -> None:
         match = re.search(rf'^{re.escape(key)}\s*=\s*"(.*)"\s*$', text, re.MULTILINE)
         value = (match.group(1) if match else "").strip()
         if not value:
-            message = (f'Preset {key} is empty. Pin the in-project template explicitly, e.g.\n'
-                       f'  {key}="res://../.local/export_templates/{TEMPLATE_VERSION_DIR}/'
-                       f'windows_{"debug" if "debug" in key else "release"}_x86_64.exe"')
-            if require_files:
-                raise BuildError(message)
-            log(f"  note: {key} is empty (allowed for --pack-only)")
+            log(f"Preset {key}: empty -> native lookup {template_dir()}")
             continue
-        resolved = GAME_PATH / Path(value.replace("res://", "", 1))
-        if not resolved.is_absolute():
-            resolved = (GAME_PATH / resolved).resolve()
-        if not resolved.is_file():
-            message = (f"Preset {key} pins a template that does not exist: {value}\n"
-                       f"  resolved to: {resolved}\n"
-                       "Install the templates with --install-templates first.")
-            if require_files:
-                raise BuildError(message)
-            log(f"  note: {key} -> {resolved} (missing; allowed for --pack-only)")
-            continue
-        log(f"Preset {key}: {value} (exists)")
+        message = (f"Preset {key} pins {value!r}. Leave it empty so Godot uses the native "
+                   f"lookup {template_dir()}; a pinned path does not reproduce.")
+        if require_files:
+            raise BuildError(message)
+        log(f"  note: {message} (allowed for --pack-only)")
 
 
 def resolve_template() -> Path:
@@ -386,13 +412,14 @@ def install_templates(archive: Path, force: bool = False) -> None:
         raise BuildError(f"Export-template archive is not a readable zip: {exc}") from exc
 
     # Hard requirement: the template must be the exact build this editor expects.
-    version = template_version_of(template_exe("release"))
-    log(f"  template version: {version}")
+    version, reporting = template_version_evidence()
+    log(f"  template version: {version} (reported by {reporting.name})")
     if version != EXPECTED_ENGINE_VERSION:
         raise BuildError(
             f"Template version {version} does not match the required engine build "
             f"{EXPECTED_ENGINE_VERSION}.")
-    log("PASS: template installed into Godot's standard template directory")
+    log("PASS: template installed into the engine's own template directory "
+        f"({template_dir()}); custom_template stays empty in export_presets.cfg")
 
 
 def run_pack_audit(godot: Path, paths: Paths) -> int:
@@ -520,8 +547,13 @@ def verify_package_contents(paths: Paths) -> None:
             + ", ".join(sorted(unexpected)))
 
 
-def run_smoke(godot: Path, paths: Paths) -> int:
-    """Validate the final PCK and the real release binary; return verified check count."""
+def run_smoke(godot: Path, paths: Paths) -> dict:
+    """Validate the final PCK and the real release binary.
+
+    Returns the two independent verification results separately: loading the pack with
+    the editor runtime does NOT prove that the release binary starts, so the two flags
+    must never share a source.
+    """
     # Official release templates disable --main-pack / --script overrides, so the
     # final data pack is validated with the identical-version editor runtime, and
     # the real release binary is launched separately for a normal-start check.
@@ -559,14 +591,18 @@ def run_smoke(godot: Path, paths: Paths) -> int:
             "Release EXE did not report a Forward+ renderer in its startup output. "
             "The build must not be shipped as a verified Forward+ build.")
     log("PASS: real release EXE normal startup (separate from PCK functional smoke)")
-    return checks
+    return {
+        "pck_smoke_checks": checks,
+        "pck_smoke_verified": True,
+        "normal_start_verified": True,
+    }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Star Abyss Windows x64 release build")
     parser.add_argument("--godot", default=os.environ.get("STARABYSS_GODOT", DEFAULT_GODOT),
                         help="Path to the Godot 4.7.2 console editor binary")
-    parser.add_argument("--out", default=str(DEFAULT_PATHS.build_root),
+    parser.add_argument("--out", default=str(DEFAULT_BUILD_ROOT),
                         help="Build output root (default: builds/windows)")
     parser.add_argument("--install-templates", default="", metavar="TPZ",
                         help="Extract the release template from an official .tpz archive and exit")
@@ -582,8 +618,6 @@ def main() -> int:
                         help="Wait up to SECONDS for other engine processes to exit")
     args = parser.parse_args()
 
-    paths = Paths.from_root(Path(args.out).resolve())
-
     godot = Path(args.godot).resolve()
     if not godot.is_file():
         log(f"FATAL: Godot editor not found: {godot}")
@@ -596,6 +630,10 @@ def main() -> int:
             install_templates(Path(args.install_templates), args.force_templates)
             log("PASS: export template installed")
             return 0
+
+        # The release archive must carry the project's own version, never a hard-coded one.
+        version_tag = project_version()
+        paths = Paths.from_root(Path(args.out).resolve(), version_tag)
 
         template = None if args.pack_only else resolve_template()
 
@@ -625,8 +663,8 @@ def main() -> int:
         if template is not None:
             template_sha = sha256_of(template)
             log(f"Template sha256: {template_sha}")
-            template_version = template_version_of(template)
-            log(f"Template version: {template_version}")
+            template_version, reporting = template_version_evidence()
+            log(f"Template version: {template_version} (reported by {reporting.name})")
             if template_version != version:
                 raise BuildError(
                     f"Template/editor versions differ: template {template_version} versus "
@@ -662,14 +700,16 @@ def main() -> int:
         write_engine_notices(godot, paths)
         (paths.package_path / "试玩说明.txt").write_text(PACKAGE_README, encoding="utf-8")
 
-        smoke_checks = 0
+        smoke = {"pck_smoke_checks": 0, "pck_smoke_verified": False,
+                 "normal_start_verified": False}
         if args.skip_smoke:
             log("SKIP: gameplay/startup smoke; this build remains unverified.")
         else:
-            smoke_checks = run_smoke(godot, paths)
+            smoke = run_smoke(godot, paths)
 
         build_info = {
             "stage": "P7",
+            "version": version_tag,
             "target": "Windows x86_64",
             "configuration": "release",
             "engine_version": version,
@@ -680,9 +720,13 @@ def main() -> int:
             "pck_bytes": paths.pck.stat().st_size,
             "exe_sha256": sha256_of(paths.exe),
             "pck_sha256": sha256_of(paths.pck),
-            "pck_functional_smoke_checks": smoke_checks,
-            "pck_functional_smoke_verified": smoke_checks > 0,
-            "release_normal_start_verified": smoke_checks > 0,
+            "pack_audit_checks": audit_checks,
+            "pack_audit_verified": True,
+            # Two independent facts: the pack loads under the editor runtime, and the
+            # real release binary starts on its own. Neither implies the other.
+            "pck_functional_smoke_checks": smoke["pck_smoke_checks"],
+            "pck_functional_smoke_verified": smoke["pck_smoke_verified"],
+            "release_normal_start_verified": smoke["normal_start_verified"],
             "release_native_input_verified": False,
             "human_playtest_verified": False,
         }

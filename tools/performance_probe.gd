@@ -87,14 +87,19 @@ func _test() -> void:
 	await process_frame
 	await process_frame
 	if _probe_mode == "info":
+		# Load the real main menu so the captured frame is presentable content (UI text
+		# sharpness is the human-visible symptom if the framebuffer is really smaller).
+		var info_menu: MainMenu = (load("res://scenes/ui/main_menu.tscn") as PackedScene).instantiate() as MainMenu
+		root.add_child(info_menu)
+		current_scene = info_menu
+		await create_timer(0.75).timeout
 		# Second sample disables the project's canvas_items stretch to show whether a
 		# shrink in root_texture_size comes from stretching or from the real swapchain.
-		var stretched: Dictionary = _resolution_info()
+		var stretched: Dictionary = _resolution_info("canvas_items")
 		root.content_scale_size = _probe_resolution
 		root.content_scale_mode = Window.CONTENT_SCALE_MODE_DISABLED
-		await process_frame
-		await process_frame
-		var unscaled: Dictionary = _resolution_info()
+		await create_timer(0.5).timeout
+		var unscaled: Dictionary = _resolution_info("no_stretch")
 		print("PERFORMANCE PROBE INFO: " + JSON.stringify({"shipped_stretch": stretched, "stretch_disabled": unscaled}, "\t"))
 		quit(0)
 		return
@@ -190,25 +195,42 @@ func _test() -> void:
 	quit(0 if _failures == 0 else 1)
 
 
-func _resolution_info() -> Dictionary:
+func _resolution_info(tag: String = "") -> Dictionary:
 	var screen_index: int = DisplayServer.window_get_current_screen()
 	var window_size: Vector2i = DisplayServer.window_get_size()
+	var decorated_size: Vector2i = DisplayServer.window_get_size_with_decorations()
 	var root_texture: Vector2i = root.get_texture().get_size()
 	var visible_rect: Vector2 = root.get_visible_rect().size
 	var screen_size: Vector2i = DisplayServer.screen_get_size(screen_index)
+	# The saved image is the framebuffer that is actually presented to the display:
+	# this settles "window size vs render resolution" without guessing. force_draw()
+	# first so the captured image is the drawn frame, not a stale/blank canvas.
+	var image_size: Vector2i = Vector2i.ZERO
+	RenderingServer.force_draw()
+	var image: Image = root.get_texture().get_image()
+	if image != null:
+		image_size = image.get_size()
+		var suffix: String = "_" + tag if tag != "" else ""
+		image.save_png(ProjectSettings.globalize_path("res://").path_join(
+			"../.local/validation/probe_presented_%dx%d%s.png" % [_probe_resolution.x, _probe_resolution.y, suffix]))
 	return {
 		"requested": [_probe_resolution.x, _probe_resolution.y],
 		"root_size": [root.size.x, root.size.y],
 		"display_server_window_size": [window_size.x, window_size.y],
+		"display_server_window_size_with_decorations": [decorated_size.x, decorated_size.y],
 		"root_texture_size": [root_texture.x, root_texture.y],
+		"presented_image_size": [image_size.x, image_size.y],
 		"root_visible_rect": [int(visible_rect.x), int(visible_rect.y)],
 		"content_scale_size": [root.content_scale_size.x, root.content_scale_size.y],
 		"content_scale_mode": root.content_scale_mode,
 		"content_scale_stretch": root.content_scale_stretch,
 		"content_scale_factor": root.content_scale_factor,
+		"allow_hidpi_setting": ProjectSettings.get_setting("display/window/dpi/allow_hidpi", "<unset>"),
 		"screen_size": [screen_size.x, screen_size.y],
 		"screen_scale": DisplayServer.screen_get_scale(screen_index),
 		"screen_dpi": DisplayServer.screen_get_dpi(screen_index),
+		"screen_max_scale": DisplayServer.screen_get_max_scale(),
+		"screen_refresh_hz": DisplayServer.screen_get_refresh_rate(screen_index),
 	}
 
 
