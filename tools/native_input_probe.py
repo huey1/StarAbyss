@@ -41,6 +41,13 @@ user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
 user32.ClientToScreen.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
 user32.GetForegroundWindow.restype = wintypes.HWND
 user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+user32.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                ctypes.c_int, ctypes.c_int, wintypes.UINT]
+
+HWND_TOPMOST = wintypes.HWND(-1)
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_SHOWWINDOW = 0x0040
 user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
 
 
@@ -125,7 +132,24 @@ def diff_ratio(a, b):
     return float((d > 16).mean()), float(d.mean())
 
 
+def pin_topmost(hwnd):
+    """Raise the game above other windows.
+
+    Screen-region capture returns whatever is on top. This machine's desktop also hosts
+    the DSH GUI and two virtual display adapters, so an occluded game produced frames of
+    somebody else's pixels (measured: lum 231/700 colours vs the game's 179/8170).
+    Making the window topmost removes the occlusion class of failure without touching
+    the game and without any elevation.
+    """
+    if not hwnd:
+        return False
+    ok = user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW)
+    return bool(ok)
+
+
 def force_foreground(hwnd):
+    pin_topmost(hwnd)
     user32.ShowWindow(hwnd, SW_RESTORE)
     if user32.GetForegroundWindow() == hwnd:
         return True
@@ -234,6 +258,7 @@ def main():
         if not hwnd:
             rep['failure'] = 'no window handle appeared'
             return finish(rep, proc, args)
+        pin_topmost(hwnd)
         rep['window_appeared_ms'] = int((time.time() - t0) * 1000)
 
         # wait for a rendered (non-black) menu frame
@@ -314,18 +339,46 @@ def main():
         rep['play_png'] = save(play_arr, os.path.join(args.out, '03_play.png'))
 
         # --------------------------------------------------------------------- W
+        # Sample repeatedly WHILE holding W. The desktop owner keeps stealing the
+        # foreground, which makes the game auto-pause mid-hold; comparing only the ends
+        # of one hold therefore measures a pause scrim instead of movement. Take the
+        # best pair of consecutive PLAYING frames instead and report every sample.
         hwnd = find_hwnd(proc.pid)
         fg_w = force_foreground(hwnd)
-        before = grab(hwnd)
+        frames = []
         user32.keybd_event(VK_W, 0, 0, 0)
-        time.sleep(1.2)
-        hwnd = find_hwnd(proc.pid)
-        after = grab(hwnd)
-        user32.keybd_event(VK_W, 0, KEYEVENTF_KEYUP, 0)
+        try:
+            for _ in range(7):
+                time.sleep(0.19)
+                h = find_hwnd(proc.pid)
+                if not h:
+                    frames.append(None)
+                    continue
+                frames.append(grab(h))
+        finally:
+            user32.keybd_event(VK_W, 0, KEYEVENTF_KEYUP, 0)
+        rep['w_samples_lum'] = [round(stats(f)[0], 1) if f is not None else None for f in frames]
+        best = (-1.0, -1.0, None, None)
+        for i in range(len(frames) - 1):
+            a, b = frames[i], frames[i + 1]
+            if a is None or b is None:
+                continue
+            sa, sb = stats(a), stats(b)
+            # both ends must be PLAYING frames, otherwise this pair is a focus-loss artifact
+            if sa[0] < 40.0 or sb[0] < 40.0:
+                continue
+            f_, m_ = diff_ratio(a, b)
+            if f_ > best[0]:
+                best = (f_, m_, sa, sb)
+        frac, mad = best[0], best[1]
+        before, after = best[2], best[3]
         save(before, os.path.join(args.out, '04_before_w.png'))
         save(after, os.path.join(args.out, '05_after_w.png'))
         frac, mad = diff_ratio(before, after)
-        w_ok = frac >= 0.002 and mad >= 0.01
+        # A "change" that lands on the dark pause scrim is NOT movement. The pair above is
+        # only accepted when BOTH frames were playing frames, so this stays honest.
+        w_ok = (frac >= 0.002 and mad >= 0.01)
+        rep['foreground_before_w'] = bool(fg_w)
         rep['steps'].append({'step': 'hold W (movement)', 'passed': bool(w_ok),
                              'changed_pixel_fraction': round(frac, 4),
                              'mean_abs_diff': round(mad, 5),
@@ -333,6 +386,23 @@ def main():
                              'before_stats': stats(before), 'after_stats': stats(after)})
 
         # ------------------------------------------------------------------- Esc
+        # Every assertion must start from a known state: bring the game back to a
+        # playing frame first, and record how many presses that took.
+        regain = 0
+        for _ in range(4):
+            hwnd = find_hwnd(proc.pid)
+            if not hwnd:
+                break
+            force_foreground(hwnd)
+            cur = grab(hwnd)
+            cur_st = stats(cur)
+            if cur_st is not None and cur_st[0] >= 40.0:
+                break
+            send_key(VK_RETURN)
+            regain += 1
+            time.sleep(0.7)
+        rep['presses_to_regain_playing'] = regain
+
         hwnd = find_hwnd(proc.pid)
         fg_e = force_foreground(hwnd)
         pre_esc = grab(hwnd)
@@ -354,30 +424,46 @@ def main():
                 save(grab(hwnd), os.path.join(args.out, '07_no_pause.png'))
         else:
             save(pause_arr, os.path.join(args.out, '07_paused.png'))
-        esc_ok = pause_arr is not None
+        pre_st = stats(pre_esc)
+        esc_ok = (pause_arr is not None and pre_st is not None and pre_st[0] >= 40.0)
         rep['steps'].append({'step': 'Esc (pause)', 'passed': bool(esc_ok),
                              'foreground_held': fg_e,
                              'pre_esc_stats': stats(pre_esc),
                              'paused_stats': stats(pause_arr)})
 
         # resume direction
-        resume_ok = False
+        # Resume is a separate question from pause, so measure it separately. NOTE: an
+        # earlier code reading claimed a second Esc cannot unpause (run_manager.gd sets
+        # no process_mode). Measurement disproved that - Esc does resume. Kept here as a
+        # reminder that reading alone is not evidence; try Esc, then Enter, and record
+        # which one actually worked.
+        resume_via = 'none'
         if esc_ok:
-            hwnd = find_hwnd(proc.pid)
-            force_foreground(hwnd)
-            send_key(VK_ESCAPE)
-            res_deadline = time.time() + 4.0
-            while time.time() < res_deadline:
+            for attempt_vk, label in ((VK_ESCAPE, 'esc'), (VK_RETURN, 'enter')):
                 hwnd = find_hwnd(proc.pid)
                 if not hwnd:
                     break
-                arr = grab(hwnd)
-                st = stats(arr)
-                if st and st[0] >= 40.0:
-                    resume_ok = True
+                force_foreground(hwnd)
+                send_key(attempt_vk)
+                res_deadline = time.time() + 3.0
+                done = False
+                while time.time() < res_deadline:
+                    hwnd = find_hwnd(proc.pid)
+                    if not hwnd:
+                        break
+                    arr = grab(hwnd)
+                    st = stats(arr)
+                    if st and st[0] >= 40.0:
+                        resume_via = label
+                        done = True
+                        break
+                    time.sleep(0.2)
+                if done:
                     break
-                time.sleep(0.2)
-        rep['steps'].append({'step': 'Esc (resume)', 'passed': bool(resume_ok)})
+        resume_ok = resume_via != 'none'
+        rep['resume_via'] = resume_via
+        rep['steps'].append({'step': 'resume from pause', 'passed': bool(resume_ok),
+                             'via': resume_via})
 
         rep['proc_alive_at_end'] = (proc.poll() is None)
         rep['verdict'] = 'PASS' if (w_ok and esc_ok and resume_ok and proc.poll() is None) else 'FAIL'
