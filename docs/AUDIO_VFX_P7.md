@@ -145,7 +145,7 @@ QA 的独立图形全量（2026-10-23 13:00:32，`.local/validation/full_graphic
 
 ## 3. 截图证据
 
-均在真实 Forward+ 窗口用 `Get_viewport().get_texture()` 抓取，`--resolution 1920x1080`（读回 1852×1042）：
+均在真实 Forward+ 窗口用 `Get_viewport().get_texture()` 抓取，启动参数 `--resolution 1920x1080`；PNG 实际为 **1886×1061**（作者脚本末尾打印的是运行末期的 1852×1042，差异来自窗口尺寸在抓帧过程中变化，**以 PNG 文件本身为准**）：
 
 | 文件 | 内容 |
 | --- | --- |
@@ -160,6 +160,33 @@ QA 的独立图形全量（2026-10-23 13:00:32，`.local/validation/full_graphic
 | `docs/p7_vfx_death_ring.png` | 死亡晶体爆散 + 扩散地面冲击环 |
 
 注意：截图是**摆位取证**（直接驱动动画/特效时钟的夹具视角），不是一次无干预的真实战斗录像；真实战斗下的行为由 `full-run-integration`（64 checks）与 `guardian-behavior`（44 checks）覆盖。
+
+### 3.1 客观视觉证据（像素统计，非肉眼审阅）
+
+**诚实标注**：本项目的作者（`art-vfx-audio`）与验收方（Lead）**均无图像输入能力**，因此下列证据是像素统计与帧间差异量化，**不是肉眼审阅**。工具 `tools/screenshot_check.py`（Pillow + numpy），全部 9 张图 1886×1061：
+
+| 文件 | 平均亮度 | 标准差 | 颜色数 | 纯黑占比 |
+| --- | --- | --- | --- | --- |
+| p7_vfx_combo_01.png | 135.0 | ±66.85 | 320 | 0.1% |
+| p7_vfx_combo_02.png | 135.0 | ±66.85 | 312 | 0.1% |
+| p7_vfx_combo_03.png | 135.0 | ±66.84 | 317 | 0.1% |
+| p7_vfx_boss_sweep_warning.png | 134.6 | ±67.18 | 341 | 0.1% |
+| p7_vfx_boss_sweep_active.png | 134.1 | ±66.97 | 339 | 0.1% |
+| p7_vfx_boss_shockwave_warning.png | 134.9 | ±66.73 | 353 | 0.1% |
+| p7_vfx_boss_shockwave_active.png | 132.1 | ±65.57 | 350 | 0.1% |
+| p7_vfx_impact_sparks.png | 134.5 | ±67.61 | 321 | 0.1% |
+| p7_vfx_death_ring.png | 134.2 | ±67.32 | 368 | 0.1% |
+
+帧间差异（证明不同状态渲染确实不同，不是同一张静态图）：
+
+| 对比 | 平均像素差 | 变化像素占比 | 判定 |
+| --- | --- | --- | --- |
+| combo_01 vs combo_02 | 1.419 | 1.7% | identical = False |
+| combo_02 vs combo_03 | 1.337 | 1.6% | identical = False |
+| sweep_warning vs sweep_active | 1.134 | 1.9% | identical = False |
+| shockwave_warning vs shockwave_active | 3.584 | 7.7% | identical = False |
+
+与作者自己的引擎内 diff 方向一致、量级相容：蓄力光 `threat_pulse` 0→0.9 有 2.26% 采样像素变化 >8/255、预警扇形脉动谷→峰有 2.81% 变化 >2/255。四组状态差异中 **360° 冲击环的 7.7% 最大**，与"整圈边界同时亮起"的预期一致。
 
 ---
 

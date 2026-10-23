@@ -306,30 +306,119 @@ def template_version_of(template: Path) -> str:
     return lines[-1]
 
 
+SOURCE_ROOTS = ("scripts", "scenes", "resources", "assets")
+SOURCE_FILES = ("project.godot", "export_presets.cfg")
+
+
+def check_scripts_parse(godot: Path) -> int:
+    """Refuse to export a tree where any GDScript fails to parse.
+
+    A pack built while someone is saving a script can be ship-shaped and still broken:
+    the exported bytecode carries `Parse Error: Function "x()" not found in base self`
+    and the game dies at load. `pack_audit.gd` cannot see that (it does not compile
+    scripts), so this gate runs before anything is exported.
+    """
+    sources = sorted(GAME_PATH.glob("scripts/**/*.gd"))
+    if not sources:
+        raise BuildError("No GDScript sources found under godot/scripts.")
+    log(f"Checking {len(sources)} scripts for parse errors before exporting...")
+    for source in sources:
+        relative = source.relative_to(GAME_PATH).as_posix()
+        try:
+            run_stage("script-parse", godot,
+                      ["--headless", "--path", str(GAME_PATH), "--check-only",
+                       "--script", f"res://{relative}"], GAME_PATH, 120)
+        except BuildError as exc:
+            raise BuildError(
+                f"GDScript parse gate failed for {relative}; the project is mid-edit and "
+                f"must not be exported:\n{exc}") from exc
+    log(f"PASS: all {len(sources)} scripts parse cleanly")
+    return len(sources)
+
+
+def source_snapshot() -> dict[str, tuple[int, int]]:
+    """Fingerprint of the shipped sources: (file count, newest mtime in ns)."""
+    snapshot: dict[str, tuple[int, int]] = {}
+    for root in SOURCE_ROOTS:
+        base = GAME_PATH / root
+        if not base.is_dir():
+            continue
+        files = 0
+        newest = 0
+        for path in base.rglob("*"):
+            if path.is_file():
+                files += 1
+                newest = max(newest, path.stat().st_mtime_ns)
+        snapshot[root] = (files, newest)
+    for name in SOURCE_FILES:
+        target = GAME_PATH / name
+        if target.is_file():
+            snapshot[name] = (1, target.stat().st_mtime_ns)
+    return snapshot
+
+
+def assert_sources_unchanged(before: dict[str, tuple[int, int]]) -> None:
+    """A build made while somebody edits the tree is not a release candidate."""
+    after = source_snapshot()
+    changed = [
+        f"{key}: {before.get(key)} -> {after.get(key)}"
+        for key in sorted(set(before) | set(after))
+        if before.get(key) != after.get(key)
+    ]
+    if changed:
+        raise BuildError(
+            "Project sources changed while the build was running, so this package is "
+            "not a valid candidate (someone saved files during the export):\n  "
+            + "\n  ".join(changed)
+            + "\nRebuild once the tree is quiet.")
+    log(f"PASS: source tree unchanged during the build ({len(after)} areas fingerprinted)")
+
+
 def template_version_evidence() -> tuple[str, Path]:
     """Read the engine version from an installed export template.
 
-    Release templates do not necessarily accept `--version`, so the debug template is
-    tried as a fallback. Failing both is a build failure on purpose: a version check that
-    silently passes would defeat the point of pinning the exact engine build.
+    Two independent methods are used because the template is a GUI-subsystem binary:
+    `--version` output is only visible when stdout is a pipe (interactively it is
+    dropped), so the version string is ALSO located in the binary itself. If the two
+    disagree the build stops. Failing to find any evidence is a build failure on purpose:
+    a version check that silently passes would defeat pinning the exact engine build.
     """
     rejected: list[str] = []
     for kind in ("release", "debug"):
         candidate = template_exe(kind)
         if not candidate.is_file():
             continue
+        reported = ""
         try:
-            version = template_version_of(candidate)
+            reported = template_version_of(candidate)
         except BuildError as exc:
-            rejected.append(f"{candidate.name}: {str(exc).splitlines()[0]}")
+            rejected.append(f"{candidate.name}: --version gave {str(exc).splitlines()[0]}")
+        embedded = embedded_version(candidate)
+        if reported and not re.match(r"^\d+\.\d+\.\d+\.", reported):
+            rejected.append(f"{candidate.name}: unexpected --version output {reported!r}")
             continue
-        if not re.match(r"^\d+\.\d+\.\d+\.", version):
-            rejected.append(f"{candidate.name}: unexpected output {version!r}")
+        if reported and embedded and reported != embedded:
+            raise BuildError(
+                f"Template {candidate.name} reports {reported} but embeds {embedded}.")
+        if not reported and not embedded:
             continue
-        log(f"  version reported by {candidate.name}: {version}")
+        version = reported or embedded
+        log(f"  version evidence from {candidate.name}: --version={reported or '(pipe output empty)'} "
+            f"embedded={embedded or '(not found)'}")
         return version, candidate
     detail = "\n  ".join(rejected) if rejected else "no template installed"
-    raise BuildError(f"Could not read the engine version from any installed template:\n  {detail}")
+    raise BuildError(f"Could not establish the engine version of any installed template:\n  {detail}")
+
+
+def embedded_version(binary: Path) -> str:
+    """Locate the engine version string inside a template binary."""
+    try:
+        data = binary.read_bytes()
+    except OSError as exc:
+        log(f"  note: could not read {binary} for a version scan ({exc})")
+        return ""
+    match = re.search(rb"(4\.\d+\.\d+\.stable\.official\.[0-9a-f]{9})", data)
+    return match.group(1).decode("ascii") if match else ""
 
 
 def check_preset_pin(require_files: bool = True) -> None:
@@ -582,13 +671,19 @@ def run_smoke(godot: Path, paths: Paths) -> dict:
          "--log-file", str(DIAGNOSTICS_PATH / "release-normal-start.log")],
         paths.package_path, 180,
     )
-    highlights = [line.strip() for line in start_output.splitlines()
+    # The release binary is a GUI-subsystem executable: its stdout is only reliable when
+    # it is a pipe, so the engine log file is checked as evidence as well.
+    start_log = DIAGNOSTICS_PATH / "release-normal-start.log"
+    evidence = start_output
+    if start_log.is_file():
+        evidence += "\n" + start_log.read_text(encoding="utf-8", errors="replace")
+    highlights = [line.strip() for line in evidence.splitlines()
                   if re.search(r"(?i)Vulkan|Forward\+|OpenGL|Godot Engine v|Using Device", line)]
-    for line in highlights:
+    for line in dict.fromkeys(highlights):
         log(f"    {line}")
-    if "Forward+" not in start_output:
+    if "Forward+" not in evidence:
         raise BuildError(
-            "Release EXE did not report a Forward+ renderer in its startup output. "
+            "Release EXE did not report a Forward+ renderer in its startup output or log. "
             "The build must not be shipped as a verified Forward+ build.")
     log("PASS: real release EXE normal startup (separate from PCK functional smoke)")
     return {
@@ -664,12 +759,20 @@ def main() -> int:
             template_sha = sha256_of(template)
             log(f"Template sha256: {template_sha}")
             template_version, reporting = template_version_evidence()
-            log(f"Template version: {template_version} (reported by {reporting.name})")
+            log(f"Template version: {template_version} (evidence from {reporting.name})")
             if template_version != version:
                 raise BuildError(
                     f"Template/editor versions differ: template {template_version} versus "
                     f"editor {version}. Install the export templates that match the editor "
                     "exactly.")
+
+        log("")
+        log("=== DO NOT SAVE ANY PROJECT FILE WHILE THIS BUILD RUNS ===")
+        log("Exporting a tree that is being edited ships broken script bytecode; the")
+        log("parse gate and the source fingerprint below both guard against it.")
+        log("")
+        check_scripts_parse(godot)
+        sources_before = source_snapshot()
 
         export_arguments = ["--headless", "--path", str(GAME_PATH),
                             "--log-file", str(DIAGNOSTICS_PATH / "export.log")]
@@ -703,9 +806,20 @@ def main() -> int:
         smoke = {"pck_smoke_checks": 0, "pck_smoke_verified": False,
                  "normal_start_verified": False}
         if args.skip_smoke:
-            log("SKIP: gameplay/startup smoke; this build remains unverified.")
+            log("SKIP: gameplay/startup smoke.")
+            log("WARNING: without the smoke fixture this package is NOT a release "
+                "candidate; BUILD_INFO.json records that explicitly.")
         else:
             smoke = run_smoke(godot, paths)
+
+        # Gate 3: nobody may have saved a project file while the pack was being made.
+        assert_sources_unchanged(sources_before)
+
+        release_candidate_eligible = (
+            smoke["pck_smoke_verified"]
+            and smoke["normal_start_verified"]
+            and audit_checks > 0
+        )
 
         build_info = {
             "stage": "P7",
@@ -722,6 +836,7 @@ def main() -> int:
             "pck_sha256": sha256_of(paths.pck),
             "pack_audit_checks": audit_checks,
             "pack_audit_verified": True,
+            "source_tree_stable_during_build": True,
             # Two independent facts: the pack loads under the editor runtime, and the
             # real release binary starts on its own. Neither implies the other.
             "pck_functional_smoke_checks": smoke["pck_smoke_checks"],
@@ -729,6 +844,7 @@ def main() -> int:
             "release_normal_start_verified": smoke["normal_start_verified"],
             "release_native_input_verified": False,
             "human_playtest_verified": False,
+            "release_candidate_eligible": release_candidate_eligible,
         }
         (paths.package_path / "BUILD_INFO.json").write_text(
             json.dumps(build_info, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

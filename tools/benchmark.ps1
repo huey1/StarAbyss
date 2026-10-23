@@ -82,41 +82,44 @@ function Invoke-BenchmarkRun {
     else {
         $benchmarkArgs += @('--script', '../tools/performance_probe.gd', '--', "--label=$RunLabel", "--resolution=$RunResolution", "--fps=$RunFrameCap", "--rounds=$Rounds")
     }
+    # ProcessStartInfo + a single Arguments string: Start-Process -PassThru does not
+    # expose ExitCode on Windows PowerShell 5.1, and ArgumentList is PowerShell 7 only.
+    $benchmarkQuoted = ($benchmarkArgs | ForEach-Object { if ($_ -match '\s') { '"' + $_ + '"' } else { $_ } }) -join ' '
+    $benchmarkStart = New-Object System.Diagnostics.ProcessStartInfo
+    $benchmarkStart.FileName = $benchmarkGodot
+    $benchmarkStart.WorkingDirectory = $benchmarkRoot
+    $benchmarkStart.UseShellExecute = $false
+    $benchmarkStart.CreateNoWindow = $true
+    $benchmarkStart.RedirectStandardOutput = $true
+    $benchmarkStart.RedirectStandardError = $true
+    $benchmarkStart.Arguments = $benchmarkQuoted
+    $benchmarkStart.EnvironmentVariables['APPDATA'] = $benchmarkAppData
+    $benchmarkStart.EnvironmentVariables['LOCALAPPDATA'] = $benchmarkLocalAppData
 
-    $savedAppData = $env:APPDATA
-    $savedLocalAppData = $env:LOCALAPPDATA
-    $env:APPDATA = $benchmarkAppData
-    $env:LOCALAPPDATA = $benchmarkLocalAppData
-    try {
-        Write-Output "RUN $RunLabel ($RunSuite, $RunResolution, frame cap $(if ($RunFrameCap -eq 0) { 'off' } else { $RunFrameCap })) ..."
-        $benchmarkProcess = Start-Process -FilePath $benchmarkGodot -ArgumentList $benchmarkArgs `
-            -WorkingDirectory $benchmarkRoot -NoNewWindow -PassThru `
-            -RedirectStandardOutput $benchmarkOut -RedirectStandardError $benchmarkErr
-        # Sample memory while it runs; PeakWorkingSet64 is unreadable after exit on 5.1.
-        $benchmarkPeakWorkingSet = 0.0
-        $benchmarkDeadline = [DateTime]::UtcNow.AddSeconds(600)
-        while (-not $benchmarkProcess.WaitForExit(1000)) {
-            if ([DateTime]::UtcNow -gt $benchmarkDeadline) {
-                $benchmarkProcess.Kill()
-                throw "Benchmark '$RunLabel' exceeded the ten-minute safety bound"
-            }
-            try {
-                $benchmarkWorkingSet = [math]::Round($benchmarkProcess.WorkingSet64 / 1MB, 1)
-                if ($benchmarkWorkingSet -gt $benchmarkPeakWorkingSet) { $benchmarkPeakWorkingSet = $benchmarkWorkingSet }
-            }
-            catch { }
+    Write-Output "RUN $RunLabel ($RunSuite, $RunResolution, frame cap $(if ($RunFrameCap -eq 0) { 'off' } else { $RunFrameCap })) ..."
+    $benchmarkProcess = [System.Diagnostics.Process]::Start($benchmarkStart)
+    $benchmarkStdout = $benchmarkProcess.StandardOutput.ReadToEndAsync()
+    $benchmarkStderr = $benchmarkProcess.StandardError.ReadToEndAsync()
+    # Sample memory while it runs; PeakWorkingSet64 is unreadable after exit on 5.1.
+    $benchmarkPeakWorkingSet = 0.0
+    $benchmarkDeadline = [DateTime]::UtcNow.AddSeconds(600)
+    while (-not $benchmarkProcess.WaitForExit(1000)) {
+        if ([DateTime]::UtcNow -gt $benchmarkDeadline) {
+            $benchmarkProcess.Kill()
+            throw "Benchmark '$RunLabel' exceeded the ten-minute safety bound"
         }
-        $benchmarkExit = $benchmarkProcess.ExitCode
+        try {
+            $benchmarkWorkingSet = [math]::Round($benchmarkProcess.WorkingSet64 / 1MB, 1)
+            if ($benchmarkWorkingSet -gt $benchmarkPeakWorkingSet) { $benchmarkPeakWorkingSet = $benchmarkWorkingSet }
+        }
+        catch { }
     }
-    finally {
-        $env:APPDATA = $savedAppData
-        $env:LOCALAPPDATA = $savedLocalAppData
-    }
+    $benchmarkExit = $benchmarkProcess.ExitCode
+    $benchmarkProcess.Dispose()
 
-    $benchmarkText = ''
-    foreach ($benchmarkFile in @($benchmarkOut, $benchmarkErr)) {
-        if (Test-Path -LiteralPath $benchmarkFile) { $benchmarkText += (Get-Content -LiteralPath $benchmarkFile -Raw) }
-    }
+    $benchmarkText = $benchmarkStdout.GetAwaiter().GetResult() + $benchmarkStderr.GetAwaiter().GetResult()
+    Set-Content -LiteralPath $benchmarkOut -Value $benchmarkText -Encoding utf8
+    if (Test-Path -LiteralPath $benchmarkErr) { Remove-Item -LiteralPath $benchmarkErr -Force }
     $benchmarkEngineLog = if (Test-Path -LiteralPath $benchmarkLog) { Get-Content -LiteralPath $benchmarkLog -Raw } else { '' }
     if ($RunInfo) {
         # Info mode prints the banner plus a pretty-printed JSON block; show it all.
